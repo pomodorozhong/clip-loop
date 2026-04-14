@@ -1,0 +1,55 @@
+# clip-repeat
+
+Loop a short video so the result matches a target length (default one hour). Uses [ffmpeg](https://ffmpeg.org/) under the hood.
+
+## Requirements
+
+- [uv](https://docs.astral.sh/uv/) (recommended) or another way to install the package
+- **ffmpeg** on your `PATH` — install via your OS package manager or [ffmpeg.org](https://ffmpeg.org/download.html)
+
+## Install
+
+From the repository root:
+
+```bash
+uv sync
+```
+
+This creates `.venv`, resolves dependencies from `uv.lock`, and installs the `clip-repeat` command into that environment.
+
+## Usage
+
+```text
+clip-repeat [-h] [-d DURATION] [-o PATH] [--alternate-reverse] [--trim-start-ms N] input
+```
+
+| Argument | Description |
+|----------|-------------|
+| `input` | Path to the source video file. |
+| `-d`, `--duration` | Target length of the output. Default is **1 hour** (`1h`). |
+| `-o`, `--output` | Output file path. Default is `<input_stem>_looped<suffix>` next to the input (e.g. `clip.mp4` → `clip_looped.mp4`). |
+| `--alternate-reverse` | Ping-pong: play the clip forward, then backward, then repeat that pattern. Jumps at loop points are usually invisible on the picture (re-encodes once for the forward/back segment). |
+| `--trim-start-ms N` | Drop the first **N** milliseconds of the file before any looping (default: 0). Uses input seek; with stream copy, the cut may align to the nearest keyframe, not an exact millisecond. |
+
+**Duration** can be:
+
+- A number of **seconds** (e.g. `3600`)
+- A value with a suffix: **`h`** (hours), **`m`** (minutes), or **`s`** (seconds), e.g. `1h`, `30m`, `90s`
+
+Run the CLI through uv:
+
+```bash
+uv run clip-repeat path/to/clip.mp4
+uv run clip-repeat path/to/clip.mp4 -d 30m
+uv run clip-repeat path/to/clip.mp4 -d 2h -o long.mp4
+uv run clip-repeat path/to/clip.mp4 --alternate-reverse -d 10m
+uv run clip-repeat path/to/clip.mp4 --trim-start-ms 500
+```
+
+After `uv sync`, you can also activate `.venv` and run `clip-repeat` directly.
+
+## How it works
+
+**Default:** ffmpeg skips the start trim (if any), loops the rest of the file, and trims to your duration, using stream copy (`-c copy`) when possible for speed. If ffmpeg fails with copy, your source may need re-encoding; in that case you can run ffmpeg manually with different codec options.
+
+**`--alternate-reverse`:** ffmpeg builds one cycle = full forward play + full reversed play (video reversed; audio reversed on the backward half), writes a short H.264/AAC file, then loops that file with stream copy to the target length. The first pass re-encodes so reverses are possible.

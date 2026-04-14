@@ -1,7 +1,14 @@
 [project]
 name = "clip-repeat"
 version = "0.1.0"
-description = "Add your description here"
+description = "Loop a video clip to a target duration"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = []
+
+[project.scripts]
+clip-repeat = "clip_repeat.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
