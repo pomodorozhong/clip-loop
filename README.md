@@ -1,4 +1,4 @@
-# clip-repeat
+# clip-loop
 
 Loop a short video so the result matches a target length (default one hour). Uses [ffmpeg](https://ffmpeg.org/) under the hood.
 
@@ -15,12 +15,12 @@ From the repository root:
 uv sync
 ```
 
-This creates `.venv`, resolves dependencies from `uv.lock`, and installs the `clip-repeat` command into that environment.
+This creates `.venv`, resolves dependencies from `uv.lock`, and installs the `clip-loop` command into that environment.
 
 ## Usage
 
 ```text
-clip-repeat [-h] [-d DURATION] [-o PATH] [--alternate-reverse] [--trim-start-ms N] input
+clip-loop [-h] [-d DURATION] [-o PATH] [--alternate-reverse] [--trim-start-ms N] input
 ```
 
 | Argument | Description |
@@ -39,14 +39,14 @@ clip-repeat [-h] [-d DURATION] [-o PATH] [--alternate-reverse] [--trim-start-ms 
 Run the CLI through uv:
 
 ```bash
-uv run clip-repeat path/to/clip.mp4
-uv run clip-repeat path/to/clip.mp4 -d 30m
-uv run clip-repeat path/to/clip.mp4 -d 2h -o long.mp4
-uv run clip-repeat path/to/clip.mp4 --alternate-reverse -d 10m
-uv run clip-repeat path/to/clip.mp4 --trim-start-ms 500
+uv run clip-loop path/to/clip.mp4
+uv run clip-loop path/to/clip.mp4 -d 30m
+uv run clip-loop path/to/clip.mp4 -d 2h -o long.mp4
+uv run clip-loop path/to/clip.mp4 --alternate-reverse -d 10m
+uv run clip-loop path/to/clip.mp4 --trim-start-ms 500
 ```
 
-After `uv sync`, you can also activate `.venv` and run `clip-repeat` directly.
+After `uv sync`, you can also activate `.venv` and run `clip-loop` directly.
 
 ## How it works
 

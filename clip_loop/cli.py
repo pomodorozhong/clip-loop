@@ -42,7 +42,7 @@ def format_elapsed(seconds: float) -> str:
 def ensure_ffmpeg() -> None:
     if shutil.which("ffmpeg") is None:
         sys.stderr.write(
-            "clip-repeat requires ffmpeg in PATH. Install it from https://ffmpeg.org/\n"
+            "clip-loop requires ffmpeg in PATH. Install it from https://ffmpeg.org/\n"
         )
         sys.exit(1)
 
@@ -201,7 +201,7 @@ def run_alternate_reverse_loop(
 ) -> None:
     ensure_ffmpeg()
     has_audio = ffprobe_has_audio(input_path)
-    fd, tmp_name = tempfile.mkstemp(suffix=".mp4", prefix="clip_repeat_")
+    fd, tmp_name = tempfile.mkstemp(suffix=".mp4", prefix="clip_loop_")
     os.close(fd)
     cycle_path = Path(tmp_name)
     try:
@@ -231,7 +231,7 @@ def run_alternate_reverse_loop(
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="clip-repeat",
+        prog="clip-loop",
         description="Loop a video clip until it reaches a target duration (default 1 hour).",
     )
     p.add_argument(
@@ -298,3 +298,4 @@ def main() -> None:
     print(
         f"Wrote {output_path} ({args.duration:g}s) in {format_elapsed(elapsed)}"
     )
+
