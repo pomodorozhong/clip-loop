@@ -192,12 +192,114 @@ def run_simple_loop(
         sys.exit(1)
 
 
+def apply_external_audio(
+    video_path: Path, output_path: Path, audio_path: Path, duration_sec: float
+) -> None:
+    """Replace video audio with an external track, looping/trimming to duration."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(video_path),
+        "-stream_loop",
+        "-1",
+        "-i",
+        str(audio_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-t",
+        str(duration_sec),
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
+        str(output_path),
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def build_forward_reverse_audio_cycle(audio_path: Path, cycle_path: Path) -> None:
+    """Create one audio cycle: forward then reversed."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(audio_path),
+        "-filter_complex",
+        "[0:a]asplit[a][ar];[ar]areverse[arout];[a][arout]concat=n=2:v=0:a=1[aout]",
+        "-map",
+        "[aout]",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        str(cycle_path),
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def loop_video_with_optional_audio(
+    input_path: Path,
+    output_path: Path,
+    duration_sec: float,
+    *,
+    trim_start_sec: float = 0.0,
+    external_audio_path: Path | None = None,
+    audio_alternate_reverse: bool = False,
+) -> None:
+    """Build looped video, optionally replacing audio from an external file."""
+    if external_audio_path is None:
+        run_simple_loop(
+            input_path, output_path, duration_sec, trim_start_sec=trim_start_sec
+        )
+        return
+    fd, tmp_name = tempfile.mkstemp(suffix=output_path.suffix or ".mp4", prefix="clip_loop_")
+    os.close(fd)
+    temp_video_path = Path(tmp_name)
+    temp_audio_cycle_path: Path | None = None
+    try:
+        run_simple_loop(
+            input_path, temp_video_path, duration_sec, trim_start_sec=trim_start_sec
+        )
+        audio_source_path = external_audio_path
+        if audio_alternate_reverse:
+            fd2, audio_tmp_name = tempfile.mkstemp(suffix=".m4a", prefix="clip_loop_")
+            os.close(fd2)
+            temp_audio_cycle_path = Path(audio_tmp_name)
+            build_forward_reverse_audio_cycle(external_audio_path, temp_audio_cycle_path)
+            audio_source_path = temp_audio_cycle_path
+        apply_external_audio(temp_video_path, output_path, audio_source_path, duration_sec)
+    except subprocess.CalledProcessError:
+        sys.stderr.write(
+            "ffmpeg failed while applying external audio. "
+            "Check that the audio file is a supported format.\n"
+        )
+        sys.exit(1)
+    finally:
+        temp_video_path.unlink(missing_ok=True)
+        if temp_audio_cycle_path is not None:
+            temp_audio_cycle_path.unlink(missing_ok=True)
+
+
 def run_alternate_reverse_loop(
     input_path: Path,
     output_path: Path,
     duration_sec: float,
     *,
     trim_start_sec: float = 0.0,
+    external_audio_path: Path | None = None,
+    audio_alternate_reverse: bool = False,
 ) -> None:
     ensure_ffmpeg()
     has_audio = ffprobe_has_audio(input_path)
@@ -218,13 +320,46 @@ def run_alternate_reverse_loop(
                 "Check that the file is a supported video (and audio) format.\n"
             )
             sys.exit(1)
-        try:
-            run_stream_loop_copy(cycle_path, output_path, duration_sec)
-        except subprocess.CalledProcessError:
-            sys.stderr.write(
-                "ffmpeg failed while looping the cycle to the target duration.\n"
+        if external_audio_path is None:
+            try:
+                run_stream_loop_copy(cycle_path, output_path, duration_sec)
+            except subprocess.CalledProcessError:
+                sys.stderr.write(
+                    "ffmpeg failed while looping the cycle to the target duration.\n"
+                )
+                sys.exit(1)
+        else:
+            fd2, tmp_name2 = tempfile.mkstemp(
+                suffix=output_path.suffix or ".mp4", prefix="clip_loop_"
             )
-            sys.exit(1)
+            os.close(fd2)
+            temp_video_path = Path(tmp_name2)
+            temp_audio_cycle_path: Path | None = None
+            try:
+                run_stream_loop_copy(cycle_path, temp_video_path, duration_sec)
+                audio_source_path = external_audio_path
+                if audio_alternate_reverse:
+                    fd3, audio_tmp_name = tempfile.mkstemp(
+                        suffix=".m4a", prefix="clip_loop_"
+                    )
+                    os.close(fd3)
+                    temp_audio_cycle_path = Path(audio_tmp_name)
+                    build_forward_reverse_audio_cycle(
+                        external_audio_path, temp_audio_cycle_path
+                    )
+                    audio_source_path = temp_audio_cycle_path
+                apply_external_audio(
+                    temp_video_path, output_path, audio_source_path, duration_sec
+                )
+            except subprocess.CalledProcessError:
+                sys.stderr.write(
+                    "ffmpeg failed while looping with external audio.\n"
+                )
+                sys.exit(1)
+            finally:
+                temp_video_path.unlink(missing_ok=True)
+                if temp_audio_cycle_path is not None:
+                    temp_audio_cycle_path.unlink(missing_ok=True)
     finally:
         cycle_path.unlink(missing_ok=True)
 
@@ -268,6 +403,23 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Skip the first N milliseconds of the input before looping (default: 0).",
     )
+    p.add_argument(
+        "--audio",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "Optional external audio file (e.g. mp3). "
+            "Will loop/trim as needed to match the output duration."
+        ),
+    )
+    p.add_argument(
+        "--audio-alternate-reverse",
+        action="store_true",
+        help=(
+            "With --audio, make one audio cycle as forward then reversed, "
+            "then repeat. Independent of --alternate-reverse."
+        ),
+    )
     return p
 
 
@@ -283,16 +435,33 @@ def main() -> None:
     if args.trim_start_ms < 0:
         sys.stderr.write("--trim-start-ms must be non-negative.\n")
         sys.exit(1)
+    external_audio_path: Path | None = args.audio
+    if external_audio_path is not None and not external_audio_path.is_file():
+        sys.stderr.write(f"Audio input not found: {external_audio_path}\n")
+        sys.exit(1)
+    if args.audio_alternate_reverse and external_audio_path is None:
+        sys.stderr.write("--audio-alternate-reverse requires --audio PATH.\n")
+        sys.exit(1)
     trim_start_sec = args.trim_start_ms / 1000.0
     output_path = args.output if args.output else default_output_path(input_path)
     started = time.perf_counter()
     if args.alternate_reverse:
         run_alternate_reverse_loop(
-            input_path, output_path, args.duration, trim_start_sec=trim_start_sec
+            input_path,
+            output_path,
+            args.duration,
+            trim_start_sec=trim_start_sec,
+            external_audio_path=external_audio_path,
+            audio_alternate_reverse=args.audio_alternate_reverse,
         )
     else:
-        run_simple_loop(
-            input_path, output_path, args.duration, trim_start_sec=trim_start_sec
+        loop_video_with_optional_audio(
+            input_path,
+            output_path,
+            args.duration,
+            trim_start_sec=trim_start_sec,
+            external_audio_path=external_audio_path,
+            audio_alternate_reverse=args.audio_alternate_reverse,
         )
     elapsed = time.perf_counter() - started
     print(
