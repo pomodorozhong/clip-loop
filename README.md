@@ -17,6 +17,17 @@ uv sync
 
 This creates `.venv`, resolves dependencies from `uv.lock`, and installs the `clip-loop` command into that environment.
 
+## Update
+
+From the repository root:
+
+```bash
+git pull
+uv sync
+```
+
+This updates the `clip-loop` to the latest version.
+
 ## Usage
 
 ```text
