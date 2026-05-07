@@ -308,6 +308,68 @@ def build_crossfaded_audio_cycle(
     subprocess.run(cmd, check=True)
 
 
+def build_gapped_audio_cycle(audio_path: Path, cycle_path: Path, *, gap_sec: float) -> None:
+    """Create one cycle by appending silence to the end."""
+    duration_sec = ffprobe_audio_duration_sec(audio_path)
+    total_sec = duration_sec + gap_sec
+    filt = f"[0:a]apad=pad_dur={gap_sec},atrim=end={total_sec},asetpts=PTS-STARTPTS[aout]"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(audio_path),
+        "-filter_complex",
+        filt,
+        "-map",
+        "[aout]",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        str(cycle_path),
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def build_joint_faded_audio_cycle(
+    audio_path: Path, cycle_path: Path, *, fade_sec: float
+) -> None:
+    """Create one cycle with fade-in/out at both joint edges."""
+    duration_sec = ffprobe_audio_duration_sec(audio_path)
+    # Keep in/out windows from fully consuming short cycles.
+    effective_fade_sec = min(fade_sec, duration_sec * 0.49)
+    if effective_fade_sec <= 0:
+        raise ValueError("effective joint fade duration must be positive")
+    fade_out_start_sec = max(duration_sec - effective_fade_sec, 0.0)
+    filt = (
+        f"[0:a]afade=t=in:st=0:d={effective_fade_sec},"
+        f"afade=t=out:st={fade_out_start_sec}:d={effective_fade_sec},"
+        "asetpts=PTS-STARTPTS[aout]"
+    )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(audio_path),
+        "-filter_complex",
+        filt,
+        "-map",
+        "[aout]",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        str(cycle_path),
+    ]
+    subprocess.run(cmd, check=True)
+
+
 def loop_video_with_optional_audio(
     input_path: Path,
     output_path: Path,
@@ -317,6 +379,8 @@ def loop_video_with_optional_audio(
     external_audio_path: Path | None = None,
     audio_alternate_reverse: bool = False,
     audio_crossfade_sec: float = 0.0,
+    audio_gap_sec: float = 0.0,
+    audio_joint_fade_sec: float = 0.0,
 ) -> None:
     """Build looped video, optionally replacing audio from an external file."""
     if external_audio_path is None:
@@ -328,7 +392,9 @@ def loop_video_with_optional_audio(
     os.close(fd)
     temp_video_path = Path(tmp_name)
     temp_audio_cycle_path: Path | None = None
+    temp_audio_gap_cycle_path: Path | None = None
     temp_audio_crossfade_cycle_path: Path | None = None
+    temp_audio_joint_fade_cycle_path: Path | None = None
     try:
         run_simple_loop(
             input_path, temp_video_path, duration_sec, trim_start_sec=trim_start_sec
@@ -340,6 +406,16 @@ def loop_video_with_optional_audio(
             temp_audio_cycle_path = Path(audio_tmp_name)
             build_forward_reverse_audio_cycle(external_audio_path, temp_audio_cycle_path)
             audio_source_path = temp_audio_cycle_path
+        if audio_gap_sec > 0:
+            fd4, audio_gap_tmp_name = tempfile.mkstemp(suffix=".m4a", prefix="clip_loop_")
+            os.close(fd4)
+            temp_audio_gap_cycle_path = Path(audio_gap_tmp_name)
+            build_gapped_audio_cycle(
+                audio_source_path,
+                temp_audio_gap_cycle_path,
+                gap_sec=audio_gap_sec,
+            )
+            audio_source_path = temp_audio_gap_cycle_path
         if audio_crossfade_sec > 0:
             fd3, audio_xf_tmp_name = tempfile.mkstemp(suffix=".m4a", prefix="clip_loop_")
             os.close(fd3)
@@ -350,6 +426,18 @@ def loop_video_with_optional_audio(
                 crossfade_sec=audio_crossfade_sec,
             )
             audio_source_path = temp_audio_crossfade_cycle_path
+        if audio_joint_fade_sec > 0:
+            fd5, audio_joint_tmp_name = tempfile.mkstemp(
+                suffix=".m4a", prefix="clip_loop_"
+            )
+            os.close(fd5)
+            temp_audio_joint_fade_cycle_path = Path(audio_joint_tmp_name)
+            build_joint_faded_audio_cycle(
+                audio_source_path,
+                temp_audio_joint_fade_cycle_path,
+                fade_sec=audio_joint_fade_sec,
+            )
+            audio_source_path = temp_audio_joint_fade_cycle_path
         apply_external_audio(temp_video_path, output_path, audio_source_path, duration_sec)
     except (subprocess.CalledProcessError, ValueError):
         sys.stderr.write(
@@ -361,8 +449,12 @@ def loop_video_with_optional_audio(
         temp_video_path.unlink(missing_ok=True)
         if temp_audio_cycle_path is not None:
             temp_audio_cycle_path.unlink(missing_ok=True)
+        if temp_audio_gap_cycle_path is not None:
+            temp_audio_gap_cycle_path.unlink(missing_ok=True)
         if temp_audio_crossfade_cycle_path is not None:
             temp_audio_crossfade_cycle_path.unlink(missing_ok=True)
+        if temp_audio_joint_fade_cycle_path is not None:
+            temp_audio_joint_fade_cycle_path.unlink(missing_ok=True)
 
 
 def run_alternate_reverse_loop(
@@ -374,6 +466,8 @@ def run_alternate_reverse_loop(
     external_audio_path: Path | None = None,
     audio_alternate_reverse: bool = False,
     audio_crossfade_sec: float = 0.0,
+    audio_gap_sec: float = 0.0,
+    audio_joint_fade_sec: float = 0.0,
 ) -> None:
     ensure_ffmpeg()
     has_audio = ffprobe_has_audio(input_path)
@@ -409,7 +503,9 @@ def run_alternate_reverse_loop(
             os.close(fd2)
             temp_video_path = Path(tmp_name2)
             temp_audio_cycle_path: Path | None = None
+            temp_audio_gap_cycle_path: Path | None = None
             temp_audio_crossfade_cycle_path: Path | None = None
+            temp_audio_joint_fade_cycle_path: Path | None = None
             try:
                 run_stream_loop_copy(cycle_path, temp_video_path, duration_sec)
                 audio_source_path = external_audio_path
@@ -423,6 +519,18 @@ def run_alternate_reverse_loop(
                         external_audio_path, temp_audio_cycle_path
                     )
                     audio_source_path = temp_audio_cycle_path
+                if audio_gap_sec > 0:
+                    fd5, audio_gap_tmp_name = tempfile.mkstemp(
+                        suffix=".m4a", prefix="clip_loop_"
+                    )
+                    os.close(fd5)
+                    temp_audio_gap_cycle_path = Path(audio_gap_tmp_name)
+                    build_gapped_audio_cycle(
+                        audio_source_path,
+                        temp_audio_gap_cycle_path,
+                        gap_sec=audio_gap_sec,
+                    )
+                    audio_source_path = temp_audio_gap_cycle_path
                 if audio_crossfade_sec > 0:
                     fd4, audio_xf_tmp_name = tempfile.mkstemp(
                         suffix=".m4a", prefix="clip_loop_"
@@ -435,6 +543,18 @@ def run_alternate_reverse_loop(
                         crossfade_sec=audio_crossfade_sec,
                     )
                     audio_source_path = temp_audio_crossfade_cycle_path
+                if audio_joint_fade_sec > 0:
+                    fd6, audio_joint_tmp_name = tempfile.mkstemp(
+                        suffix=".m4a", prefix="clip_loop_"
+                    )
+                    os.close(fd6)
+                    temp_audio_joint_fade_cycle_path = Path(audio_joint_tmp_name)
+                    build_joint_faded_audio_cycle(
+                        audio_source_path,
+                        temp_audio_joint_fade_cycle_path,
+                        fade_sec=audio_joint_fade_sec,
+                    )
+                    audio_source_path = temp_audio_joint_fade_cycle_path
                 apply_external_audio(
                     temp_video_path, output_path, audio_source_path, duration_sec
                 )
@@ -447,8 +567,12 @@ def run_alternate_reverse_loop(
                 temp_video_path.unlink(missing_ok=True)
                 if temp_audio_cycle_path is not None:
                     temp_audio_cycle_path.unlink(missing_ok=True)
+                if temp_audio_gap_cycle_path is not None:
+                    temp_audio_gap_cycle_path.unlink(missing_ok=True)
                 if temp_audio_crossfade_cycle_path is not None:
                     temp_audio_crossfade_cycle_path.unlink(missing_ok=True)
+                if temp_audio_joint_fade_cycle_path is not None:
+                    temp_audio_joint_fade_cycle_path.unlink(missing_ok=True)
     finally:
         cycle_path.unlink(missing_ok=True)
 
@@ -519,6 +643,26 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: 0 = disabled)."
         ),
     )
+    p.add_argument(
+        "--audio-gap-ms",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "With --audio, append N milliseconds of silence between stitched "
+            "audio clips (default: 0 = disabled)."
+        ),
+    )
+    p.add_argument(
+        "--audio-joint-fade-ms",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "With --audio, fade volume down near the end and up at the start "
+            "of each stitched clip by N milliseconds (default: 0 = disabled)."
+        ),
+    )
     return p
 
 
@@ -547,8 +691,22 @@ def main() -> None:
     if args.audio_crossfade_ms > 0 and external_audio_path is None:
         sys.stderr.write("--audio-crossfade-ms requires --audio PATH.\n")
         sys.exit(1)
+    if args.audio_gap_ms < 0:
+        sys.stderr.write("--audio-gap-ms must be non-negative.\n")
+        sys.exit(1)
+    if args.audio_gap_ms > 0 and external_audio_path is None:
+        sys.stderr.write("--audio-gap-ms requires --audio PATH.\n")
+        sys.exit(1)
+    if args.audio_joint_fade_ms < 0:
+        sys.stderr.write("--audio-joint-fade-ms must be non-negative.\n")
+        sys.exit(1)
+    if args.audio_joint_fade_ms > 0 and external_audio_path is None:
+        sys.stderr.write("--audio-joint-fade-ms requires --audio PATH.\n")
+        sys.exit(1)
     trim_start_sec = args.trim_start_ms / 1000.0
     audio_crossfade_sec = args.audio_crossfade_ms / 1000.0
+    audio_gap_sec = args.audio_gap_ms / 1000.0
+    audio_joint_fade_sec = args.audio_joint_fade_ms / 1000.0
     output_path = args.output if args.output else default_output_path(input_path)
     started = time.perf_counter()
     if args.alternate_reverse:
@@ -560,6 +718,8 @@ def main() -> None:
             external_audio_path=external_audio_path,
             audio_alternate_reverse=args.audio_alternate_reverse,
             audio_crossfade_sec=audio_crossfade_sec,
+            audio_gap_sec=audio_gap_sec,
+            audio_joint_fade_sec=audio_joint_fade_sec,
         )
     else:
         loop_video_with_optional_audio(
@@ -570,6 +730,8 @@ def main() -> None:
             external_audio_path=external_audio_path,
             audio_alternate_reverse=args.audio_alternate_reverse,
             audio_crossfade_sec=audio_crossfade_sec,
+            audio_gap_sec=audio_gap_sec,
+            audio_joint_fade_sec=audio_joint_fade_sec,
         )
     elapsed = time.perf_counter() - started
     print(
