@@ -31,7 +31,7 @@ This updates the `clip-loop` to the latest version.
 ## Usage
 
 ```text
-clip-loop [-h] [-d DURATION] [-o PATH] [--alternate-reverse] [--trim-start-ms N] [--audio PATH] [--audio-alternate-reverse] input
+clip-loop [-h] [-d DURATION] [-o PATH] [--alternate-reverse] [--trim-start-ms N] [--audio PATH] [--audio-alternate-reverse] [--audio-crossfade-ms N] input
 ```
 
 | Argument | Description |
@@ -43,6 +43,7 @@ clip-loop [-h] [-d DURATION] [-o PATH] [--alternate-reverse] [--trim-start-ms N]
 | `--trim-start-ms N` | Drop the first **N** milliseconds of the file before any looping (default: 0). Uses input seek; with stream copy, the cut may align to the nearest keyframe, not an exact millisecond. |
 | `--audio PATH` | Optional external audio file (for example MP3). Audio can be any length: it will be looped if too short or trimmed if too long so the output still matches target duration. |
 | `--audio-alternate-reverse` | With `--audio`, make audio ping-pong (forward then reversed, then repeat). This is separate from `--alternate-reverse` so you can control audio reverse behavior independently. |
+| `--audio-crossfade-ms N` | With `--audio`, crossfade stitched audio seams by **N** milliseconds (`0` disables crossfade). Applies whether or not `--audio-alternate-reverse` is used. |
 
 **Duration** can be:
 
@@ -59,6 +60,7 @@ uv run clip-loop path/to/clip.mp4 --alternate-reverse -d 10m
 uv run clip-loop path/to/clip.mp4 --trim-start-ms 500
 uv run clip-loop path/to/clip.mp4 --audio path/to/music.mp3 -d 1h
 uv run clip-loop path/to/clip.mp4 --audio path/to/music.mp3 --audio-alternate-reverse -d 1h
+uv run clip-loop path/to/clip.mp4 --audio path/to/music.mp3 --audio-crossfade-ms 120 -d 1h
 ```
 
 After `uv sync`, you can also activate `.venv` and run `clip-loop` directly.

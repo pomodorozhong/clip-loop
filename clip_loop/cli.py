@@ -64,6 +64,26 @@ def ffprobe_has_audio(path: Path) -> bool:
     return bool(r.stdout.strip())
 
 
+def ffprobe_audio_duration_sec(path: Path) -> float:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    value = r.stdout.strip()
+    if not value:
+        raise ValueError(f"ffprobe could not determine audio duration: {path}")
+    return float(value)
+
+
 def build_forward_reverse_cycle(
     input_path: Path,
     cycle_path: Path,
@@ -249,6 +269,45 @@ def build_forward_reverse_audio_cycle(audio_path: Path, cycle_path: Path) -> Non
     subprocess.run(cmd, check=True)
 
 
+def build_crossfaded_audio_cycle(
+    audio_path: Path, cycle_path: Path, *, crossfade_sec: float
+) -> None:
+    """Create one cycle with a crossfaded loop seam."""
+    duration_sec = ffprobe_audio_duration_sec(audio_path)
+    # acrossfade requires d > 0 and works best when strictly shorter than half the cycle.
+    max_crossfade_sec = duration_sec * 0.49
+    effective_crossfade_sec = min(crossfade_sec, max_crossfade_sec)
+    if effective_crossfade_sec <= 0:
+        raise ValueError("effective crossfade duration must be positive")
+
+    filt = (
+        f"[0:a][1:a]acrossfade=d={effective_crossfade_sec}:c1=tri:c2=tri[xf];"
+        f"[xf]atrim=start={effective_crossfade_sec}:end={duration_sec + effective_crossfade_sec},"
+        "asetpts=PTS-STARTPTS[aout]"
+    )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(audio_path),
+        "-i",
+        str(audio_path),
+        "-filter_complex",
+        filt,
+        "-map",
+        "[aout]",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        str(cycle_path),
+    ]
+    subprocess.run(cmd, check=True)
+
+
 def loop_video_with_optional_audio(
     input_path: Path,
     output_path: Path,
@@ -257,6 +316,7 @@ def loop_video_with_optional_audio(
     trim_start_sec: float = 0.0,
     external_audio_path: Path | None = None,
     audio_alternate_reverse: bool = False,
+    audio_crossfade_sec: float = 0.0,
 ) -> None:
     """Build looped video, optionally replacing audio from an external file."""
     if external_audio_path is None:
@@ -268,6 +328,7 @@ def loop_video_with_optional_audio(
     os.close(fd)
     temp_video_path = Path(tmp_name)
     temp_audio_cycle_path: Path | None = None
+    temp_audio_crossfade_cycle_path: Path | None = None
     try:
         run_simple_loop(
             input_path, temp_video_path, duration_sec, trim_start_sec=trim_start_sec
@@ -279,8 +340,18 @@ def loop_video_with_optional_audio(
             temp_audio_cycle_path = Path(audio_tmp_name)
             build_forward_reverse_audio_cycle(external_audio_path, temp_audio_cycle_path)
             audio_source_path = temp_audio_cycle_path
+        if audio_crossfade_sec > 0:
+            fd3, audio_xf_tmp_name = tempfile.mkstemp(suffix=".m4a", prefix="clip_loop_")
+            os.close(fd3)
+            temp_audio_crossfade_cycle_path = Path(audio_xf_tmp_name)
+            build_crossfaded_audio_cycle(
+                audio_source_path,
+                temp_audio_crossfade_cycle_path,
+                crossfade_sec=audio_crossfade_sec,
+            )
+            audio_source_path = temp_audio_crossfade_cycle_path
         apply_external_audio(temp_video_path, output_path, audio_source_path, duration_sec)
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, ValueError):
         sys.stderr.write(
             "ffmpeg failed while applying external audio. "
             "Check that the audio file is a supported format.\n"
@@ -290,6 +361,8 @@ def loop_video_with_optional_audio(
         temp_video_path.unlink(missing_ok=True)
         if temp_audio_cycle_path is not None:
             temp_audio_cycle_path.unlink(missing_ok=True)
+        if temp_audio_crossfade_cycle_path is not None:
+            temp_audio_crossfade_cycle_path.unlink(missing_ok=True)
 
 
 def run_alternate_reverse_loop(
@@ -300,6 +373,7 @@ def run_alternate_reverse_loop(
     trim_start_sec: float = 0.0,
     external_audio_path: Path | None = None,
     audio_alternate_reverse: bool = False,
+    audio_crossfade_sec: float = 0.0,
 ) -> None:
     ensure_ffmpeg()
     has_audio = ffprobe_has_audio(input_path)
@@ -335,6 +409,7 @@ def run_alternate_reverse_loop(
             os.close(fd2)
             temp_video_path = Path(tmp_name2)
             temp_audio_cycle_path: Path | None = None
+            temp_audio_crossfade_cycle_path: Path | None = None
             try:
                 run_stream_loop_copy(cycle_path, temp_video_path, duration_sec)
                 audio_source_path = external_audio_path
@@ -348,10 +423,22 @@ def run_alternate_reverse_loop(
                         external_audio_path, temp_audio_cycle_path
                     )
                     audio_source_path = temp_audio_cycle_path
+                if audio_crossfade_sec > 0:
+                    fd4, audio_xf_tmp_name = tempfile.mkstemp(
+                        suffix=".m4a", prefix="clip_loop_"
+                    )
+                    os.close(fd4)
+                    temp_audio_crossfade_cycle_path = Path(audio_xf_tmp_name)
+                    build_crossfaded_audio_cycle(
+                        audio_source_path,
+                        temp_audio_crossfade_cycle_path,
+                        crossfade_sec=audio_crossfade_sec,
+                    )
+                    audio_source_path = temp_audio_crossfade_cycle_path
                 apply_external_audio(
                     temp_video_path, output_path, audio_source_path, duration_sec
                 )
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, ValueError):
                 sys.stderr.write(
                     "ffmpeg failed while looping with external audio.\n"
                 )
@@ -360,6 +447,8 @@ def run_alternate_reverse_loop(
                 temp_video_path.unlink(missing_ok=True)
                 if temp_audio_cycle_path is not None:
                     temp_audio_cycle_path.unlink(missing_ok=True)
+                if temp_audio_crossfade_cycle_path is not None:
+                    temp_audio_crossfade_cycle_path.unlink(missing_ok=True)
     finally:
         cycle_path.unlink(missing_ok=True)
 
@@ -420,6 +509,16 @@ def build_parser() -> argparse.ArgumentParser:
             "then repeat. Independent of --alternate-reverse."
         ),
     )
+    p.add_argument(
+        "--audio-crossfade-ms",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "With --audio, crossfade each stitched audio seam by N milliseconds "
+            "(default: 0 = disabled)."
+        ),
+    )
     return p
 
 
@@ -442,7 +541,14 @@ def main() -> None:
     if args.audio_alternate_reverse and external_audio_path is None:
         sys.stderr.write("--audio-alternate-reverse requires --audio PATH.\n")
         sys.exit(1)
+    if args.audio_crossfade_ms < 0:
+        sys.stderr.write("--audio-crossfade-ms must be non-negative.\n")
+        sys.exit(1)
+    if args.audio_crossfade_ms > 0 and external_audio_path is None:
+        sys.stderr.write("--audio-crossfade-ms requires --audio PATH.\n")
+        sys.exit(1)
     trim_start_sec = args.trim_start_ms / 1000.0
+    audio_crossfade_sec = args.audio_crossfade_ms / 1000.0
     output_path = args.output if args.output else default_output_path(input_path)
     started = time.perf_counter()
     if args.alternate_reverse:
@@ -453,6 +559,7 @@ def main() -> None:
             trim_start_sec=trim_start_sec,
             external_audio_path=external_audio_path,
             audio_alternate_reverse=args.audio_alternate_reverse,
+            audio_crossfade_sec=audio_crossfade_sec,
         )
     else:
         loop_video_with_optional_audio(
@@ -462,6 +569,7 @@ def main() -> None:
             trim_start_sec=trim_start_sec,
             external_audio_path=external_audio_path,
             audio_alternate_reverse=args.audio_alternate_reverse,
+            audio_crossfade_sec=audio_crossfade_sec,
         )
     elapsed = time.perf_counter() - started
     print(
