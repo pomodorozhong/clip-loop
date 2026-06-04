@@ -12,10 +12,10 @@ Loop a short video so the result matches a target length (default one hour). Use
 From the repository root:
 
 ```bash
-uv sync
+uv sync --extra tui
 ```
 
-This creates `.venv`, resolves dependencies from `uv.lock`, and installs the `clip-loop` command into that environment.
+This creates `.venv`, resolves dependencies from `uv.lock`, and installs the `clip-loop` command into that environment. The `tui` extra adds [Textual](https://textual.textualize.io/) for the interactive setup UI (`--tui`). For CLI-only use, `uv sync` without the extra is enough.
 
 ## Update
 
@@ -31,7 +31,7 @@ This updates the `clip-loop` to the latest version.
 ## Usage
 
 ```text
-clip-loop [-h] [-d DURATION] [-o PATH] [--alternate-reverse] [--trim-start-ms N] [--audio PATH] [--audio-alternate-reverse] [--audio-crossfade-ms N] [--audio-gap-ms N] [--audio-joint-fade-ms N] input
+clip-loop [-h] [--tui] [-d DURATION] [-o PATH] [--alternate-reverse] [--trim-start-ms N] [--audio PATH] [--audio-alternate-reverse] [--audio-crossfade-ms N] [--audio-gap-ms N] [--audio-seam-fade-ms N] [input]
 ```
 
 | Argument | Description |
@@ -45,7 +45,8 @@ clip-loop [-h] [-d DURATION] [-o PATH] [--alternate-reverse] [--trim-start-ms N]
 | `--audio-alternate-reverse` | With `--audio`, make audio ping-pong (forward then reversed, then repeat). This is separate from `--alternate-reverse` so you can control audio reverse behavior independently. |
 | `--audio-crossfade-ms N` | With `--audio`, crossfade stitched audio seams by **N** milliseconds (`0` disables crossfade). Applies whether or not `--audio-alternate-reverse` is used. |
 | `--audio-gap-ms N` | With `--audio`, append **N** milliseconds of silence between stitched audio clips (`0` disables gap). Applies whether or not `--audio-alternate-reverse` is used. |
-| `--audio-joint-fade-ms N` | With `--audio`, fade volume down near each clip end and up at each clip start by **N** milliseconds (`0` disables). Applies whether or not `--audio-alternate-reverse` is used. |
+| `--audio-seam-fade-ms N` | With `--audio`, fade volume down near each clip end and up at each clip start by **N** milliseconds (`0` disables). Applies whether or not `--audio-alternate-reverse` is used. |
+| `--tui` | Open an interactive terminal UI: duration and millisecond presets as dropdowns, booleans as checkboxes, **Video options** and **Audio options** in separate collapsible sections, and file browse buttons. Requires `uv sync --extra tui`. |
 
 **Duration** can be:
 
@@ -55,6 +56,8 @@ clip-loop [-h] [-d DURATION] [-o PATH] [--alternate-reverse] [--trim-start-ms N]
 Run the CLI through uv:
 
 ```bash
+uv run clip-loop --tui
+uv run clip-loop --tui path/to/clip.mp4
 uv run clip-loop path/to/clip.mp4
 uv run clip-loop path/to/clip.mp4 -d 30m
 uv run clip-loop path/to/clip.mp4 -d 2h -o long.mp4
@@ -64,7 +67,7 @@ uv run clip-loop path/to/clip.mp4 --audio path/to/music.mp3 -d 1h
 uv run clip-loop path/to/clip.mp4 --audio path/to/music.mp3 --audio-alternate-reverse -d 1h
 uv run clip-loop path/to/clip.mp4 --audio path/to/music.mp3 --audio-crossfade-ms 120 -d 1h
 uv run clip-loop path/to/clip.mp4 --audio path/to/music.mp3 --audio-gap-ms 250 -d 1h
-uv run clip-loop path/to/clip.mp4 --audio path/to/music.mp3 --audio-joint-fade-ms 120 -d 1h
+uv run clip-loop path/to/clip.mp4 --audio path/to/music.mp3 --audio-seam-fade-ms 120 -d 1h
 ```
 
 After `uv sync`, you can also activate `.venv` and run `clip-loop` directly.
