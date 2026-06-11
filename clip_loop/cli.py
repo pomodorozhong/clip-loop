@@ -64,6 +64,20 @@ def parse_crop_corner(value: str) -> str:
     return corner
 
 
+def parse_speed_percent(value: str) -> float:
+    """Parse speed: 80, 80%, 120, or 120% (percent of normal playback)."""
+    s = value.strip().lower()
+    if not s:
+        raise argparse.ArgumentTypeError("speed cannot be empty")
+    if s.endswith("%"):
+        percent = float(s[:-1])
+    else:
+        percent = float(s)
+    if percent <= 0:
+        raise argparse.ArgumentTypeError("speed must be positive")
+    return percent
+
+
 def format_elapsed(seconds: float) -> str:
     if seconds < 60:
         return f"{seconds:.2f}s"
@@ -702,6 +716,16 @@ def _add_loop_arguments(p: argparse.ArgumentParser) -> None:
         help="Skip the first N milliseconds of the input before looping (default: 0).",
     )
     p.add_argument(
+        "--speed",
+        type=parse_speed_percent,
+        default=100.0,
+        metavar="PERCENT",
+        help=(
+            "Playback speed as a percentage of normal (default: 100). "
+            "Examples: 80 for 80%%, 120 for 120%%. Re-encodes when not 100."
+        ),
+    )
+    p.add_argument(
         "--audio",
         type=Path,
         metavar="PATH",
@@ -795,6 +819,7 @@ def validate_clip_loop_options(
     audio_seam_fade_ms: int,
     keep_ratio: float | None = None,
     crop_corner: str | None = None,
+    speed_percent: float = 100.0,
 ) -> None:
     if not input_path.is_file():
         raise ClipLoopError(f"Input not found: {input_path}")
@@ -802,6 +827,8 @@ def validate_clip_loop_options(
         raise ClipLoopError("Duration must be positive.")
     if trim_start_ms < 0:
         raise ClipLoopError("--trim-start-ms must be non-negative.")
+    if speed_percent <= 0:
+        raise ClipLoopError("--speed must be positive.")
     if audio_path is not None and not audio_path.is_file():
         raise ClipLoopError(f"Audio input not found: {audio_path}")
     if audio_alternate_reverse and audio_path is None:
@@ -904,6 +931,102 @@ def run_crop_video(
     return resolved_output
 
 
+def build_atempo_chain(speed_factor: float) -> str:
+    """Build an atempo filter chain; each stage must stay within 0.5–2.0."""
+    filters: list[str] = []
+    remaining = speed_factor
+    while remaining > 2.0:
+        filters.append("atempo=2.0")
+        remaining /= 2.0
+    while remaining < 0.5:
+        filters.append("atempo=0.5")
+        remaining /= 0.5
+    filters.append(f"atempo={remaining:g}")
+    return ",".join(filters)
+
+
+def run_speed_adjust(
+    input_path: Path,
+    output_path: Path,
+    speed_percent: float,
+    *,
+    trim_start_sec: float = 0.0,
+) -> None:
+    """Re-encode video (and embedded audio) at the given speed percentage."""
+    speed_factor = speed_percent / 100.0
+    setpts_factor = 1.0 / speed_factor
+    has_audio = ffprobe_has_audio(input_path)
+    head = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+    ]
+    if trim_start_sec > 0:
+        head.extend(["-ss", str(trim_start_sec)])
+    if has_audio:
+        atempo = build_atempo_chain(speed_factor)
+        filt = (
+            f"[0:v]setpts={setpts_factor:g}*PTS[vout];"
+            f"[0:a]{atempo}[aout]"
+        )
+        cmd = [
+            *head,
+            "-i",
+            str(input_path),
+            "-filter_complex",
+            filt,
+            "-map",
+            "[vout]",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+    else:
+        cmd = [
+            *head,
+            "-i",
+            str(input_path),
+            "-vf",
+            f"setpts={setpts_factor:g}*PTS",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError:
+        sys.stderr.write(
+            "ffmpeg failed while adjusting playback speed. "
+            "Check that the file is a supported video format.\n"
+        )
+        sys.exit(1)
+
+
 def run_clip_loop(
     *,
     input_path: Path,
@@ -918,6 +1041,7 @@ def run_clip_loop(
     audio_seam_fade_ms: int = 0,
     keep_ratio: float | None = None,
     crop_corner: str | None = None,
+    speed_percent: float = 100.0,
 ) -> Path:
     """Validate options, run ffmpeg, and return the output path."""
     validate_clip_loop_options(
@@ -931,6 +1055,7 @@ def run_clip_loop(
         audio_seam_fade_ms=audio_seam_fade_ms,
         keep_ratio=keep_ratio,
         crop_corner=crop_corner,
+        speed_percent=speed_percent,
     )
     trim_start_sec = trim_start_ms / 1000.0
     audio_crossfade_sec = audio_crossfade_ms / 1000.0
@@ -939,6 +1064,8 @@ def run_clip_loop(
     resolved_output = output_path if output_path else default_output_path(input_path)
     source_path = input_path
     temp_crop_path: Path | None = None
+    temp_speed_path: Path | None = None
+    loop_trim_start_sec = trim_start_sec
     try:
         if keep_ratio is not None and crop_corner is not None:
             fd, tmp_name = tempfile.mkstemp(
@@ -953,12 +1080,26 @@ def run_clip_loop(
                 output_path=temp_crop_path,
             )
             source_path = temp_crop_path
+        if speed_percent != 100.0:
+            fd, tmp_name = tempfile.mkstemp(
+                suffix=source_path.suffix or ".mp4", prefix="clip_loop_speed_"
+            )
+            os.close(fd)
+            temp_speed_path = Path(tmp_name)
+            run_speed_adjust(
+                source_path,
+                temp_speed_path,
+                speed_percent,
+                trim_start_sec=loop_trim_start_sec,
+            )
+            source_path = temp_speed_path
+            loop_trim_start_sec = 0.0
         if alternate_reverse:
             run_alternate_reverse_loop(
                 source_path,
                 resolved_output,
                 duration,
-                trim_start_sec=trim_start_sec,
+                trim_start_sec=loop_trim_start_sec,
                 external_audio_path=audio_path,
                 audio_alternate_reverse=audio_alternate_reverse,
                 audio_crossfade_sec=audio_crossfade_sec,
@@ -970,7 +1111,7 @@ def run_clip_loop(
                 source_path,
                 resolved_output,
                 duration,
-                trim_start_sec=trim_start_sec,
+                trim_start_sec=loop_trim_start_sec,
                 external_audio_path=audio_path,
                 audio_alternate_reverse=audio_alternate_reverse,
                 audio_crossfade_sec=audio_crossfade_sec,
@@ -978,6 +1119,8 @@ def run_clip_loop(
                 audio_seam_fade_sec=audio_seam_fade_sec,
             )
     finally:
+        if temp_speed_path is not None:
+            temp_speed_path.unlink(missing_ok=True)
         if temp_crop_path is not None:
             temp_crop_path.unlink(missing_ok=True)
     return resolved_output
@@ -997,6 +1140,7 @@ def _namespace_to_kwargs(args: Any) -> dict[str, Any]:
         "audio_seam_fade_ms": args.audio_seam_fade_ms,
         "keep_ratio": args.keep_ratio,
         "crop_corner": args.corner,
+        "speed_percent": args.speed,
     }
 
 

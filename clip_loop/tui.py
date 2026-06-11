@@ -32,6 +32,7 @@ from clip_loop.cli import (
     parse_crop_corner,
     parse_duration,
     parse_keep_ratio,
+    parse_speed_percent,
     run_clip_loop,
     validate_clip_loop_options,
 )
@@ -53,6 +54,8 @@ HIGHLIGHTABLE_IDS = (
     "#audio-path",
     "#trim-preset",
     "#trim-custom",
+    "#speed-preset",
+    "#speed-custom",
     "#keep-ratio-preset",
     "#keep-ratio-custom",
     "#crop-corner",
@@ -80,6 +83,8 @@ VIDEO_SECTION_IDS = frozenset(
     {
         "#trim-preset",
         "#trim-custom",
+        "#speed-preset",
+        "#speed-custom",
         "#keep-ratio-preset",
         "#keep-ratio-custom",
         "#crop-corner",
@@ -116,6 +121,15 @@ MS_PRESETS: tuple[tuple[str, str], ...] = (
     ("250 ms", "250"),
     ("500 ms", "500"),
     ("1000 ms", "1000"),
+    ("Custom…", "custom"),
+)
+
+SPEED_PRESETS: tuple[tuple[str, str], ...] = (
+    ("50%", "50"),
+    ("80%", "80"),
+    ("100% (normal)", "100"),
+    ("120%", "120"),
+    ("150%", "150"),
     ("Custom…", "custom"),
 )
 
@@ -195,6 +209,16 @@ def _keep_ratio_from_form(select: Select[str], custom: Input) -> float:
     return parse_keep_ratio(value)
 
 
+def _speed_from_form(select: Select[str], custom: Input) -> float:
+    value = select.value
+    if value is Select.BLANK or value == "100":
+        return 100.0
+    if value == "custom":
+        text = custom.value.strip() or "100"
+        return parse_speed_percent(text)
+    return parse_speed_percent(value)
+
+
 def _widget_for_clip_loop_error(message: str, *, duration_is_custom: bool) -> str:
     if "Input not found" in message:
         return "#input-path"
@@ -206,6 +230,8 @@ def _widget_for_clip_loop_error(message: str, *, duration_is_custom: bool) -> st
         return "#duration-custom" if duration_is_custom else "#duration-preset"
     if "keep ratio" in message.lower():
         return "#keep-ratio-custom" if "custom" in message else "#keep-ratio-preset"
+    if "speed" in message.lower():
+        return "#speed-custom" if "custom" in message else "#speed-preset"
     if "--corner" in message or "corner must be" in message.lower():
         return "#crop-corner"
     if "Invalid crop" in message:
@@ -360,6 +386,13 @@ class ClipLoopApp(App[None]):
                     id="trim-custom",
                     classes="hidden-custom",
                 )
+                yield Label("Playback speed", classes="field-label")
+                yield Select(SPEED_PRESETS, id="speed-preset", value="100")
+                yield Input(
+                    placeholder="e.g. 80 or 120",
+                    id="speed-custom",
+                    classes="hidden-custom",
+                )
                 yield Label("Crop before loop", classes="field-label")
                 yield Select(KEEP_RATIO_PRESETS, id="keep-ratio-preset", value="off")
                 yield Input(
@@ -447,6 +480,7 @@ class ClipLoopApp(App[None]):
         self._sync_audio_options()
         self._sync_custom_visibility("duration-preset", "duration-custom")
         self._sync_custom_visibility("trim-preset", "trim-custom")
+        self._sync_custom_visibility("speed-preset", "speed-custom")
         self._sync_custom_visibility("keep-ratio-preset", "keep-ratio-custom")
         for preset_id, custom_id in (
             ("crossfade-preset", "crossfade-custom"),
@@ -537,6 +571,18 @@ class ClipLoopApp(App[None]):
             )
             errors.append("Invalid trim start value.")
 
+        speed_select = self.query_one("#speed-preset", Select)
+        speed_custom = self.query_one("#speed-custom", Input)
+        speed_is_custom = speed_select.value == "custom"
+        speed_percent = 100.0
+        try:
+            speed_percent = _speed_from_form(speed_select, speed_custom)
+        except (ValueError, argparse.ArgumentTypeError):
+            highlights.append(
+                "#speed-custom" if speed_is_custom else "#speed-preset"
+            )
+            errors.append("Invalid playback speed.")
+
         keep_ratio_select = self.query_one("#keep-ratio-preset", Select)
         keep_ratio_custom = self.query_one("#keep-ratio-custom", Input)
         crop_enabled = _is_crop_enabled(keep_ratio_select)
@@ -613,6 +659,7 @@ class ClipLoopApp(App[None]):
                     audio_seam_fade_ms=audio_seam_fade_ms,
                     keep_ratio=keep_ratio,
                     crop_corner=crop_corner,
+                    speed_percent=speed_percent,
                 )
             except ClipLoopError as exc:
                 widget_id = _widget_for_clip_loop_error(
@@ -766,6 +813,10 @@ class ClipLoopApp(App[None]):
     def trim_preset_changed(self) -> None:
         self._sync_custom_visibility("trim-preset", "trim-custom")
 
+    @on(Select.Changed, "#speed-preset")
+    def speed_preset_changed(self) -> None:
+        self._sync_custom_visibility("speed-preset", "speed-custom")
+
     @on(Select.Changed, "#crossfade-preset")
     def crossfade_preset_changed(self) -> None:
         self._sync_custom_visibility("crossfade-preset", "crossfade-custom")
@@ -851,6 +902,10 @@ class ClipLoopApp(App[None]):
             ),
             "keep_ratio": keep_ratio,
             "crop_corner": crop_corner,
+            "speed_percent": _speed_from_form(
+                self.query_one("#speed-preset", Select),
+                self.query_one("#speed-custom", Input),
+            ),
         }
 
     def _start_run(self) -> None:
