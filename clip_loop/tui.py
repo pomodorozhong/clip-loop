@@ -28,7 +28,9 @@ from textual.widgets import (
 from clip_loop.cli import (
     ClipLoopError,
     format_elapsed,
+    parse_crop_corner,
     parse_duration,
+    parse_keep_ratio,
     run_clip_loop,
     validate_clip_loop_options,
 )
@@ -43,6 +45,9 @@ HIGHLIGHTABLE_IDS = (
     "#audio-path",
     "#trim-preset",
     "#trim-custom",
+    "#keep-ratio-preset",
+    "#keep-ratio-custom",
+    "#crop-corner",
     "#crossfade-preset",
     "#crossfade-custom",
     "#gap-preset",
@@ -63,7 +68,29 @@ AUDIO_SECTION_IDS = frozenset(
         "#seam-fade-custom",
     }
 )
-VIDEO_SECTION_IDS = frozenset({"#trim-preset", "#trim-custom"})
+VIDEO_SECTION_IDS = frozenset(
+    {
+        "#trim-preset",
+        "#trim-custom",
+        "#keep-ratio-preset",
+        "#keep-ratio-custom",
+        "#crop-corner",
+    }
+)
+KEEP_RATIO_PRESETS: tuple[tuple[str, str], ...] = (
+    ("Off", "off"),
+    ("90%", "90%"),
+    ("80%", "80%"),
+    ("50%", "50%"),
+    ("Custom…", "custom"),
+)
+
+CROP_CORNER_PRESETS: tuple[tuple[str, str], ...] = (
+    ("Top left (keep bottom-right)", "top_left"),
+    ("Top right (keep bottom-left)", "top_right"),
+    ("Bottom left (keep top-right)", "bottom_left"),
+    ("Bottom right (keep top-left)", "bottom_right"),
+)
 
 DURATION_PRESETS: tuple[tuple[str, str], ...] = (
     ("90 seconds", "90s"),
@@ -145,6 +172,21 @@ def _duration_from_form(select: Select[str], custom: Input) -> float:
     return parse_duration(value)
 
 
+def _is_crop_enabled(select: Select[str]) -> bool:
+    value = select.value
+    return value is not Select.BLANK and value != "off"
+
+
+def _keep_ratio_from_form(select: Select[str], custom: Input) -> float:
+    value = select.value
+    if value is Select.BLANK or value == "off":
+        raise ValueError("crop is disabled")
+    if value == "custom":
+        text = custom.value.strip() or "80%"
+        return parse_keep_ratio(text)
+    return parse_keep_ratio(value)
+
+
 def _widget_for_clip_loop_error(message: str, *, duration_is_custom: bool) -> str:
     if "Input not found" in message:
         return "#input-path"
@@ -154,6 +196,12 @@ def _widget_for_clip_loop_error(message: str, *, duration_is_custom: bool) -> st
         return "#audio-path"
     if "Duration must be positive" in message or "duration cannot be empty" in message:
         return "#duration-custom" if duration_is_custom else "#duration-preset"
+    if "keep ratio" in message.lower():
+        return "#keep-ratio-custom" if "custom" in message else "#keep-ratio-preset"
+    if "--corner" in message or "corner must be" in message.lower():
+        return "#crop-corner"
+    if "Invalid crop" in message:
+        return "#keep-ratio-preset"
     return "#input-path"
 
 
@@ -304,6 +352,21 @@ class ClipLoopApp(App[None]):
                     id="trim-custom",
                     classes="hidden-custom",
                 )
+                yield Label("Crop before loop", classes="field-label")
+                yield Select(KEEP_RATIO_PRESETS, id="keep-ratio-preset", value="off")
+                yield Input(
+                    placeholder="e.g. 75% or 0.75",
+                    id="keep-ratio-custom",
+                    classes="hidden-custom",
+                    disabled=True,
+                )
+                yield Label("Crop corner", classes="field-label")
+                yield Select(
+                    CROP_CORNER_PRESETS,
+                    id="crop-corner",
+                    value="top_left",
+                    disabled=True,
+                )
 
             with Collapsible(title="Audio options", collapsed=True, id="audio-collapsible"):
                 yield Label("External audio (optional)", classes="field-label")
@@ -372,9 +435,11 @@ class ClipLoopApp(App[None]):
             self.query_one("#output-path", Input).value = str(self._initial_output)
         if self._initial_audio is not None:
             self.query_one("#audio-path", Input).value = str(self._initial_audio)
+        self._sync_crop_options()
         self._sync_audio_options()
         self._sync_custom_visibility("duration-preset", "duration-custom")
         self._sync_custom_visibility("trim-preset", "trim-custom")
+        self._sync_custom_visibility("keep-ratio-preset", "keep-ratio-custom")
         for preset_id, custom_id in (
             ("crossfade-preset", "crossfade-custom"),
             ("gap-preset", "gap-custom"),
@@ -404,6 +469,17 @@ class ClipLoopApp(App[None]):
             self.query_one("#audio-collapsible", Collapsible).collapsed = False
         if VIDEO_SECTION_IDS.intersection(widget_ids):
             self.query_one("#video-collapsible", Collapsible).collapsed = False
+
+    def _sync_crop_options(self) -> None:
+        enabled = _is_crop_enabled(self.query_one("#keep-ratio-preset", Select))
+        custom = self.query_one("#keep-ratio-custom")
+        corner = self.query_one("#crop-corner")
+        custom.disabled = not enabled
+        corner.disabled = not enabled
+        if enabled:
+            self._sync_custom_visibility("keep-ratio-preset", "keep-ratio-custom")
+        else:
+            custom.display = False
 
     def _validate_before_run(self) -> str | None:
         highlights: list[str] = []
@@ -453,6 +529,33 @@ class ClipLoopApp(App[None]):
             )
             errors.append("Invalid trim start value.")
 
+        keep_ratio_select = self.query_one("#keep-ratio-preset", Select)
+        keep_ratio_custom = self.query_one("#keep-ratio-custom", Input)
+        crop_enabled = _is_crop_enabled(keep_ratio_select)
+        keep_ratio: float | None = None
+        crop_corner: str | None = None
+        if crop_enabled:
+            keep_ratio_is_custom = keep_ratio_select.value == "custom"
+            try:
+                keep_ratio = _keep_ratio_from_form(keep_ratio_select, keep_ratio_custom)
+            except (ValueError, argparse.ArgumentTypeError):
+                highlights.append(
+                    "#keep-ratio-custom"
+                    if keep_ratio_is_custom
+                    else "#keep-ratio-preset"
+                )
+                errors.append("Invalid keep ratio.")
+            corner_select = self.query_one("#crop-corner", Select)
+            if corner_select.value is Select.BLANK:
+                highlights.append("#crop-corner")
+                errors.append("Crop corner is required.")
+            else:
+                try:
+                    crop_corner = parse_crop_corner(corner_select.value)
+                except argparse.ArgumentTypeError:
+                    highlights.append("#crop-corner")
+                    errors.append("Invalid crop corner.")
+
         crossfade_select = self.query_one("#crossfade-preset", Select)
         crossfade_custom = self.query_one("#crossfade-custom", Input)
         gap_select = self.query_one("#gap-preset", Select)
@@ -487,7 +590,7 @@ class ClipLoopApp(App[None]):
             else:
                 audio_seam_fade_ms = ms
 
-        if input_path is not None and duration_ok:
+        if input_path is not None and duration_ok and not errors:
             try:
                 validate_clip_loop_options(
                     input_path=input_path,
@@ -500,6 +603,8 @@ class ClipLoopApp(App[None]):
                     audio_crossfade_ms=audio_crossfade_ms,
                     audio_gap_ms=audio_gap_ms,
                     audio_seam_fade_ms=audio_seam_fade_ms,
+                    keep_ratio=keep_ratio,
+                    crop_corner=crop_corner,
                 )
             except ClipLoopError as exc:
                 widget_id = _widget_for_clip_loop_error(
@@ -601,6 +706,11 @@ class ClipLoopApp(App[None]):
     def duration_preset_changed(self) -> None:
         self._sync_custom_visibility("duration-preset", "duration-custom")
 
+    @on(Select.Changed, "#keep-ratio-preset")
+    def keep_ratio_preset_changed(self) -> None:
+        self._sync_crop_options()
+        self._sync_custom_visibility("keep-ratio-preset", "keep-ratio-custom")
+
     @on(Select.Changed, "#trim-preset")
     def trim_preset_changed(self) -> None:
         self._sync_custom_visibility("trim-preset", "trim-custom")
@@ -643,14 +753,26 @@ class ClipLoopApp(App[None]):
     def _collect_options(self) -> dict:
         input_text = self.query_one("#input-path", Input).value.strip()
         output_text = self.query_one("#output-path", Input).value.strip()
+        output_path = Path(output_text) if output_text else None
+        keep_ratio_select = self.query_one("#keep-ratio-preset", Select)
+        keep_ratio: float | None = None
+        crop_corner: str | None = None
+        if _is_crop_enabled(keep_ratio_select):
+            keep_ratio = _keep_ratio_from_form(
+                keep_ratio_select,
+                self.query_one("#keep-ratio-custom", Input),
+            )
+            crop_corner = parse_crop_corner(
+                self.query_one("#crop-corner", Select).value
+            )
         audio_text = self.query_one("#audio-path", Input).value.strip()
         return {
-            "input_path": Path(input_text) if input_text else None,
+            "input_path": Path(input_text),
             "duration": _duration_from_form(
                 self.query_one("#duration-preset", Select),
                 self.query_one("#duration-custom", Input),
             ),
-            "output_path": Path(output_text) if output_text else None,
+            "output_path": output_path,
             "alternate_reverse": self.query_one("#alternate-reverse", Checkbox).value,
             "trim_start_ms": _ms_from_select(
                 self.query_one("#trim-preset", Select),
@@ -672,6 +794,8 @@ class ClipLoopApp(App[None]):
                 self.query_one("#seam-fade-preset", Select),
                 self.query_one("#seam-fade-custom", Input),
             ),
+            "keep_ratio": keep_ratio,
+            "crop_corner": crop_corner,
         }
 
     def _start_run(self) -> None:

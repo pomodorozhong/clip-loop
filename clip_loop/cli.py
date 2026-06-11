@@ -33,6 +33,37 @@ def default_output_path(input_path: Path) -> Path:
     return input_path.with_name(f"{input_path.stem}_looped{input_path.suffix}")
 
 
+def default_crop_output_path(input_path: Path) -> Path:
+    return input_path.with_name(f"{input_path.stem}_cropped{input_path.suffix}")
+
+
+CROP_CORNERS = frozenset({"top_left", "top_right", "bottom_left", "bottom_right"})
+
+
+def parse_keep_ratio(value: str) -> float:
+    """Parse keep ratio: 80%, 50%, 0.8, or 80 (percent)."""
+    s = value.strip().lower()
+    if not s:
+        raise argparse.ArgumentTypeError("keep ratio cannot be empty")
+    if s.endswith("%"):
+        ratio = float(s[:-1]) / 100.0
+    else:
+        ratio = float(s)
+        if ratio > 1.0:
+            ratio /= 100.0
+    if not 0.0 < ratio <= 1.0:
+        raise argparse.ArgumentTypeError("keep ratio must be between 0 and 100%")
+    return ratio
+
+
+def parse_crop_corner(value: str) -> str:
+    corner = value.strip().lower()
+    if corner not in CROP_CORNERS:
+        choices = ", ".join(sorted(CROP_CORNERS))
+        raise argparse.ArgumentTypeError(f"corner must be one of: {choices}")
+    return corner
+
+
 def format_elapsed(seconds: float) -> str:
     if seconds < 60:
         return f"{seconds:.2f}s"
@@ -50,6 +81,58 @@ def ensure_ffmpeg() -> None:
             "clip-loop requires ffmpeg in PATH. Install it from https://ffmpeg.org/\n"
         )
         sys.exit(1)
+
+
+def ffprobe_video_size(path: Path) -> tuple[int, int]:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=p=0:s=x",
+        str(path),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    value = r.stdout.strip()
+    if not value or "x" not in value:
+        raise ValueError(f"ffprobe could not determine video size: {path}")
+    width_str, height_str = value.split("x", 1)
+    return int(width_str), int(height_str)
+
+
+def compute_crop_rect(
+    width: int,
+    height: int,
+    keep_ratio: float,
+    corner: str,
+) -> tuple[int, int, int, int]:
+    """Return crop_w, crop_h, x, y for the kept region (even dimensions)."""
+    crop_w = int(width * keep_ratio)
+    crop_h = int(height * keep_ratio)
+    crop_w -= crop_w % 2
+    crop_h -= crop_h % 2
+    if crop_w <= 0 or crop_h <= 0:
+        raise ValueError("keep ratio is too small for this video size")
+    if crop_w > width or crop_h > height:
+        raise ValueError("keep ratio must be at most 100%")
+
+    if corner == "top_left":
+        x = width - crop_w
+        y = height - crop_h
+    elif corner == "top_right":
+        x = 0
+        y = height - crop_h
+    elif corner == "bottom_left":
+        x = width - crop_w
+        y = 0
+    else:  # bottom_right
+        x = 0
+        y = 0
+    return crop_w, crop_h, x, y
 
 
 def ffprobe_has_audio(path: Path) -> bool:
@@ -582,11 +665,7 @@ def run_alternate_reverse_loop(
         cycle_path.unlink(missing_ok=True)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="clip-loop",
-        description="Loop a video clip until it reaches a target duration (default 1 hour).",
-    )
+def _add_loop_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "input",
         type=Path,
@@ -674,6 +753,33 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Open an interactive terminal UI to configure options.",
     )
+    p.add_argument(
+        "--keep-ratio",
+        type=parse_keep_ratio,
+        metavar="RATIO",
+        help=(
+            "Before looping, crop away a corner and scale back to the original "
+            "frame size. Requires --corner. Examples: 80%%, 50%%, 0.8"
+        ),
+    )
+    p.add_argument(
+        "--corner",
+        type=parse_crop_corner,
+        metavar="CORNER",
+        help=(
+            "With --keep-ratio, corner to remove. top_left keeps bottom-right; "
+            "top_right keeps bottom-left; bottom_left keeps top-right; "
+            "bottom_right keeps top-left."
+        ),
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="clip-loop",
+        description="Loop a video clip until it reaches a target duration (default 1 hour).",
+    )
+    _add_loop_arguments(p)
     return p
 
 
@@ -687,6 +793,8 @@ def validate_clip_loop_options(
     audio_crossfade_ms: int,
     audio_gap_ms: int,
     audio_seam_fade_ms: int,
+    keep_ratio: float | None = None,
+    crop_corner: str | None = None,
 ) -> None:
     if not input_path.is_file():
         raise ClipLoopError(f"Input not found: {input_path}")
@@ -710,6 +818,90 @@ def validate_clip_loop_options(
         raise ClipLoopError("--audio-seam-fade-ms must be non-negative.")
     if audio_seam_fade_ms > 0 and audio_path is None:
         raise ClipLoopError("--audio-seam-fade-ms requires --audio PATH.")
+    if (keep_ratio is None) != (crop_corner is None):
+        raise ClipLoopError("--keep-ratio and --corner must be used together.")
+    if keep_ratio is not None and crop_corner is not None:
+        validate_crop_options(
+            input_path=input_path,
+            keep_ratio=keep_ratio,
+            corner=crop_corner,
+        )
+
+
+def validate_crop_options(
+    *,
+    input_path: Path,
+    keep_ratio: float,
+    corner: str,
+) -> None:
+    if not input_path.is_file():
+        raise ClipLoopError(f"Input not found: {input_path}")
+    if corner not in CROP_CORNERS:
+        choices = ", ".join(sorted(CROP_CORNERS))
+        raise ClipLoopError(f"--corner must be one of: {choices}")
+    try:
+        width, height = ffprobe_video_size(input_path)
+        compute_crop_rect(width, height, keep_ratio, corner)
+    except (subprocess.CalledProcessError, ValueError) as exc:
+        raise ClipLoopError(f"Invalid crop for {input_path}: {exc}") from exc
+
+
+def run_crop_video(
+    *,
+    input_path: Path,
+    keep_ratio: float,
+    corner: str,
+    output_path: Path | None = None,
+) -> Path:
+    """Crop away a corner, scale back to original size, and return the output path."""
+    validate_crop_options(
+        input_path=input_path,
+        keep_ratio=keep_ratio,
+        corner=corner,
+    )
+    ensure_ffmpeg()
+    width, height = ffprobe_video_size(input_path)
+    crop_w, crop_h, x, y = compute_crop_rect(width, height, keep_ratio, corner)
+    resolved_output = output_path if output_path else default_crop_output_path(input_path)
+    has_audio = ffprobe_has_audio(input_path)
+    filt = f"crop={crop_w}:{crop_h}:{x}:{y},scale={width}:{height}"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(input_path),
+        "-vf",
+        filt,
+        "-map",
+        "0:v:0",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+    ]
+    if has_audio:
+        cmd.extend(["-map", "0:a:0", "-c:a", "copy"])
+    else:
+        cmd.append("-an")
+    cmd.append(str(resolved_output))
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError:
+        sys.stderr.write(
+            "ffmpeg failed while cropping video. "
+            "Check that the file is a supported video format.\n"
+        )
+        sys.exit(1)
+    return resolved_output
 
 
 def run_clip_loop(
@@ -724,6 +916,8 @@ def run_clip_loop(
     audio_crossfade_ms: int = 0,
     audio_gap_ms: int = 0,
     audio_seam_fade_ms: int = 0,
+    keep_ratio: float | None = None,
+    crop_corner: str | None = None,
 ) -> Path:
     """Validate options, run ffmpeg, and return the output path."""
     validate_clip_loop_options(
@@ -735,36 +929,57 @@ def run_clip_loop(
         audio_crossfade_ms=audio_crossfade_ms,
         audio_gap_ms=audio_gap_ms,
         audio_seam_fade_ms=audio_seam_fade_ms,
+        keep_ratio=keep_ratio,
+        crop_corner=crop_corner,
     )
     trim_start_sec = trim_start_ms / 1000.0
     audio_crossfade_sec = audio_crossfade_ms / 1000.0
     audio_gap_sec = audio_gap_ms / 1000.0
     audio_seam_fade_sec = audio_seam_fade_ms / 1000.0
     resolved_output = output_path if output_path else default_output_path(input_path)
-    if alternate_reverse:
-        run_alternate_reverse_loop(
-            input_path,
-            resolved_output,
-            duration,
-            trim_start_sec=trim_start_sec,
-            external_audio_path=audio_path,
-            audio_alternate_reverse=audio_alternate_reverse,
-            audio_crossfade_sec=audio_crossfade_sec,
-            audio_gap_sec=audio_gap_sec,
-            audio_seam_fade_sec=audio_seam_fade_sec,
-        )
-    else:
-        loop_video_with_optional_audio(
-            input_path,
-            resolved_output,
-            duration,
-            trim_start_sec=trim_start_sec,
-            external_audio_path=audio_path,
-            audio_alternate_reverse=audio_alternate_reverse,
-            audio_crossfade_sec=audio_crossfade_sec,
-            audio_gap_sec=audio_gap_sec,
-            audio_seam_fade_sec=audio_seam_fade_sec,
-        )
+    source_path = input_path
+    temp_crop_path: Path | None = None
+    try:
+        if keep_ratio is not None and crop_corner is not None:
+            fd, tmp_name = tempfile.mkstemp(
+                suffix=input_path.suffix or ".mp4", prefix="clip_loop_crop_"
+            )
+            os.close(fd)
+            temp_crop_path = Path(tmp_name)
+            run_crop_video(
+                input_path=input_path,
+                keep_ratio=keep_ratio,
+                corner=crop_corner,
+                output_path=temp_crop_path,
+            )
+            source_path = temp_crop_path
+        if alternate_reverse:
+            run_alternate_reverse_loop(
+                source_path,
+                resolved_output,
+                duration,
+                trim_start_sec=trim_start_sec,
+                external_audio_path=audio_path,
+                audio_alternate_reverse=audio_alternate_reverse,
+                audio_crossfade_sec=audio_crossfade_sec,
+                audio_gap_sec=audio_gap_sec,
+                audio_seam_fade_sec=audio_seam_fade_sec,
+            )
+        else:
+            loop_video_with_optional_audio(
+                source_path,
+                resolved_output,
+                duration,
+                trim_start_sec=trim_start_sec,
+                external_audio_path=audio_path,
+                audio_alternate_reverse=audio_alternate_reverse,
+                audio_crossfade_sec=audio_crossfade_sec,
+                audio_gap_sec=audio_gap_sec,
+                audio_seam_fade_sec=audio_seam_fade_sec,
+            )
+    finally:
+        if temp_crop_path is not None:
+            temp_crop_path.unlink(missing_ok=True)
     return resolved_output
 
 
@@ -780,6 +995,8 @@ def _namespace_to_kwargs(args: Any) -> dict[str, Any]:
         "audio_crossfade_ms": args.audio_crossfade_ms,
         "audio_gap_ms": args.audio_gap_ms,
         "audio_seam_fade_ms": args.audio_seam_fade_ms,
+        "keep_ratio": args.keep_ratio,
+        "crop_corner": args.corner,
     }
 
 
