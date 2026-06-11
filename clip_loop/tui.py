@@ -34,6 +34,12 @@ from clip_loop.cli import (
     run_clip_loop,
     validate_clip_loop_options,
 )
+from clip_loop.file_dialog import (
+    AUDIO_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    pick_open_file,
+    pick_save_file,
+)
 
 INVALID_CLASS = "-invalid"
 
@@ -680,10 +686,57 @@ class ClipLoopApp(App[None]):
         start = Path(text)
         return start.parent if start.suffix else start
 
+    def _browse_save_defaults(self, input_id: str) -> tuple[Path, str]:
+        text = self.query_one(input_id, Input).value.strip()
+        if text:
+            path = Path(text)
+            if path.suffix:
+                return path.parent, path.name
+            return path, "output.mp4"
+        input_text = self.query_one("#input-path", Input).value.strip()
+        if input_text:
+            source = Path(input_text)
+            return source.parent, f"{source.stem}_looped{source.suffix or '.mp4'}"
+        return Path.home(), "output.mp4"
+
+    def _pick_path(
+        self,
+        *,
+        input_id: str,
+        start: Path,
+        save: bool = False,
+    ) -> Path | None:
+        with self.suspend():
+            if save:
+                start_dir, default_name = self._browse_save_defaults(input_id)
+                return pick_save_file(
+                    title="Save output as",
+                    start=start_dir,
+                    default_name=default_name,
+                )
+            if input_id == "#audio-path":
+                return pick_open_file(
+                    title="Select audio file",
+                    start=start,
+                    extensions=AUDIO_EXTENSIONS,
+                )
+            return pick_open_file(
+                title="Select video file",
+                start=start,
+                extensions=VIDEO_EXTENSIONS,
+            )
+
     @work(exclusive=True)
-    async def _browse_into_input(self, input_id: str, start: Path) -> None:
-        """Textual 8 requires push_screen_wait from inside a worker."""
-        picked = await self.push_screen_wait(FilePickScreen(start=start))
+    async def _browse_into_input(
+        self,
+        input_id: str,
+        start: Path,
+        *,
+        save: bool = False,
+    ) -> None:
+        picked = self._pick_path(input_id=input_id, start=start, save=save)
+        if picked is None:
+            picked = await self.push_screen_wait(FilePickScreen(start=Path.home()))
         if picked is not None:
             self.query_one(input_id, Input).value = str(picked)
             if input_id == "#audio-path":
@@ -733,7 +786,11 @@ class ClipLoopApp(App[None]):
 
     @on(Button.Pressed, "#browse-output")
     def browse_output(self) -> None:
-        self._browse_into_input("#output-path", self._browse_start_dir("#output-path"))
+        self._browse_into_input(
+            "#output-path",
+            self._browse_start_dir("#output-path"),
+            save=True,
+        )
 
     @on(Button.Pressed, "#browse-audio")
     def browse_audio(self) -> None:
@@ -808,12 +865,12 @@ class ClipLoopApp(App[None]):
         self.query_one("#quit", Button).disabled = True
         self._set_status("")
         self._show_run_progress()
-        self._run_job_worker()
+        # Widget state must be read on the main thread before the worker runs.
+        self._run_job_worker(self._collect_options())
 
     @work(thread=True, exclusive=True)
-    def _run_job_worker(self) -> None:
+    def _run_job_worker(self, opts: dict) -> None:
         try:
-            opts = self._collect_options()
             output = run_clip_loop(**opts)
         except SystemExit:
             self.call_from_thread(
