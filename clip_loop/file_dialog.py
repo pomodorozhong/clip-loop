@@ -11,6 +11,20 @@ VIDEO_EXTENSIONS = ("mp4", "mov", "mkv", "avi", "webm", "m4v")
 AUDIO_EXTENSIONS = ("mp3", "wav", "m4a", "aac", "flac", "ogg", "opus")
 
 
+def native_file_dialog_available() -> bool:
+    """Return True when a native OS file dialog can be shown."""
+    system = platform.system()
+    if system == "Darwin":
+        return shutil.which("osascript") is not None
+    if system == "Linux":
+        return shutil.which("zenity") is not None or shutil.which("kdialog") is not None
+    try:
+        import tkinter  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def _escape_applescript(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -188,13 +202,10 @@ def pick_open_file(
     system = platform.system()
 
     if system == "Darwin":
-        picked = _macos_pick_open(title, start_dir, extensions)
-        if picked is not None:
-            return picked
-    elif system == "Linux":
-        picked = _linux_pick_open(title, start_dir)
-        if picked is not None:
-            return picked
+        return _macos_pick_open(title, start_dir, extensions)
+    if system == "Linux":
+        if shutil.which("zenity") or shutil.which("kdialog"):
+            return _linux_pick_open(title, start_dir)
 
     return _tkinter_pick_open(title, start_dir, extensions)
 
@@ -210,12 +221,9 @@ def pick_save_file(
     system = platform.system()
 
     if system == "Darwin":
-        picked = _macos_pick_save(title, start_dir, default_name)
-        if picked is not None:
-            return picked
-    elif system == "Linux":
-        picked = _linux_pick_save(title, start_dir, default_name)
-        if picked is not None:
-            return picked
+        return _macos_pick_save(title, start_dir, default_name)
+    if system == "Linux":
+        if shutil.which("zenity") or shutil.which("kdialog"):
+            return _linux_pick_save(title, start_dir, default_name)
 
     return _tkinter_pick_save(title, start_dir, default_name)

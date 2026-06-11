@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import time
 from pathlib import Path
 
@@ -37,6 +38,7 @@ from clip_loop.cli import (
 from clip_loop.file_dialog import (
     AUDIO_EXTENSIONS,
     VIDEO_EXTENSIONS,
+    native_file_dialog_available,
     pick_open_file,
     pick_save_file,
 )
@@ -699,33 +701,6 @@ class ClipLoopApp(App[None]):
             return source.parent, f"{source.stem}_looped{source.suffix or '.mp4'}"
         return Path.home(), "output.mp4"
 
-    def _pick_path(
-        self,
-        *,
-        input_id: str,
-        start: Path,
-        save: bool = False,
-    ) -> Path | None:
-        with self.suspend():
-            if save:
-                start_dir, default_name = self._browse_save_defaults(input_id)
-                return pick_save_file(
-                    title="Save output as",
-                    start=start_dir,
-                    default_name=default_name,
-                )
-            if input_id == "#audio-path":
-                return pick_open_file(
-                    title="Select audio file",
-                    start=start,
-                    extensions=AUDIO_EXTENSIONS,
-                )
-            return pick_open_file(
-                title="Select video file",
-                start=start,
-                extensions=VIDEO_EXTENSIONS,
-            )
-
     @work(exclusive=True)
     async def _browse_into_input(
         self,
@@ -734,9 +709,32 @@ class ClipLoopApp(App[None]):
         *,
         save: bool = False,
     ) -> None:
-        picked = self._pick_path(input_id=input_id, start=start, save=save)
+        if save:
+            start_dir, default_name = self._browse_save_defaults(input_id)
+            picked = await asyncio.to_thread(
+                pick_save_file,
+                title="Save output as",
+                start=start_dir,
+                default_name=default_name,
+            )
+        elif input_id == "#audio-path":
+            picked = await asyncio.to_thread(
+                pick_open_file,
+                title="Select audio file",
+                start=start,
+                extensions=AUDIO_EXTENSIONS,
+            )
+        else:
+            picked = await asyncio.to_thread(
+                pick_open_file,
+                title="Select video file",
+                start=start,
+                extensions=VIDEO_EXTENSIONS,
+            )
         if picked is None:
-            picked = await self.push_screen_wait(FilePickScreen(start=Path.home()))
+            if native_file_dialog_available():
+                return
+            picked = await self.push_screen_wait(FilePickScreen(start=start))
         if picked is not None:
             self.query_one(input_id, Input).value = str(picked)
             if input_id == "#audio-path":
