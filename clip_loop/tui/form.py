@@ -10,6 +10,12 @@ from textual.widgets import Checkbox, Input, Select
 
 from clip_loop.options import ClipLoopOptions
 from clip_loop.parsing import parse_crop_corner, parse_duration, parse_keep_ratio, parse_speed_percent
+from clip_loop.tui.constants import (
+    DURATION_PRESETS,
+    KEEP_RATIO_PRESETS,
+    MS_PRESETS,
+    SPEED_PRESETS,
+)
 
 
 class FormWidgets(Protocol):
@@ -180,6 +186,99 @@ class ClipLoopForm:
             self._app.query_one(selector).disabled = not has_audio
         if has_audio:
             self._app.query_one("#audio-collapsible").collapsed = False
+
+    def apply(self, options: ClipLoopOptions) -> None:
+        """Populate the form from a :class:`ClipLoopOptions` instance."""
+        self._app.query_one("#input-path", Input).value = str(options.input_path)
+        self._app.query_one("#output-path", Input).value = (
+            str(options.output_path) if options.output_path else ""
+        )
+        self._set_duration(options.duration)
+        self._app.query_one("#alternate-reverse", Checkbox).value = options.alternate_reverse
+        self._set_ms_field("trim-preset", "trim-custom", options.trim_start_ms)
+        self._set_speed(options.speed_percent)
+        self._set_keep_ratio(options.keep_ratio, options.crop_corner)
+        self._app.query_one("#audio-path", Input).value = (
+            str(options.audio_path) if options.audio_path else ""
+        )
+        self._app.query_one("#audio-alternate-reverse", Checkbox).value = (
+            options.audio_alternate_reverse
+        )
+        self._set_ms_field("crossfade-preset", "crossfade-custom", options.audio_crossfade_ms)
+        self._set_ms_field("gap-preset", "gap-custom", options.audio_gap_ms)
+        self._set_ms_field("seam-fade-preset", "seam-fade-custom", options.audio_seam_fade_ms)
+
+    def _set_ms_field(self, preset_id: str, custom_id: str, ms: int) -> None:
+        select = self._app.query_one(f"#{preset_id}", Select)
+        custom = self._app.query_one(f"#{custom_id}", Input)
+        preset_values = {value for _, value in MS_PRESETS if value != "custom"}
+        if str(ms) in preset_values:
+            select.value = str(ms)
+            custom.value = ""
+            return
+        select.value = "custom"
+        custom.value = str(ms)
+
+    def _set_duration(self, duration: float) -> None:
+        select = self._app.query_one("#duration-preset", Select)
+        custom = self._app.query_one("#duration-custom", Input)
+        for _, value in DURATION_PRESETS:
+            if value == "custom":
+                continue
+            if parse_duration(value) == duration:
+                select.value = value
+                custom.value = ""
+                return
+        select.value = "custom"
+        custom.value = _format_duration(duration)
+
+    def _set_speed(self, speed_percent: float) -> None:
+        select = self._app.query_one("#speed-preset", Select)
+        custom = self._app.query_one("#speed-custom", Input)
+        if speed_percent == int(speed_percent):
+            speed_text = str(int(speed_percent))
+        else:
+            speed_text = str(speed_percent)
+        preset_values = {value for _, value in SPEED_PRESETS if value != "custom"}
+        if speed_text in preset_values:
+            select.value = speed_text
+            custom.value = ""
+            return
+        select.value = "custom"
+        custom.value = speed_text
+
+    def _set_keep_ratio(
+        self, keep_ratio: float | None, crop_corner: str | None
+    ) -> None:
+        select = self._app.query_one("#keep-ratio-preset", Select)
+        custom = self._app.query_one("#keep-ratio-custom", Input)
+        corner = self._app.query_one("#crop-corner", Select)
+        if keep_ratio is None:
+            select.value = "off"
+            custom.value = ""
+            corner.value = "top_left"
+            return
+        for _, value in KEEP_RATIO_PRESETS:
+            if value in ("off", "custom"):
+                continue
+            if abs(parse_keep_ratio(value) - keep_ratio) < 1e-9:
+                select.value = value
+                custom.value = ""
+                corner.value = crop_corner or "top_left"
+                return
+        select.value = "custom"
+        custom.value = f"{keep_ratio * 100:g}%"
+        corner.value = crop_corner or "top_left"
+
+
+def _format_duration(duration: float) -> str:
+    if duration >= 3600 and duration % 3600 == 0:
+        return f"{int(duration // 3600)}h"
+    if duration >= 60 and duration % 60 == 0:
+        return f"{int(duration // 60)}m"
+    if duration == int(duration):
+        return str(int(duration))
+    return str(duration)
 
 
 def widget_for_clip_loop_error(message: str, *, duration_is_custom: bool) -> str:

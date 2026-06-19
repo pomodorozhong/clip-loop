@@ -23,6 +23,7 @@ from textual.widgets import (
 )
 
 from clip_loop.errors import ClipLoopError
+from clip_loop.last_run import load_last_run, save_last_run
 from clip_loop.file_dialog import (
     AUDIO_EXTENSIONS,
     VIDEO_EXTENSIONS,
@@ -80,6 +81,7 @@ class ClipLoopApp(App[None]):
         self._form = ClipLoopForm(self)
         self._validator = ClipLoopFormValidator(self._form)
         self._progress = RunProgressController(self)
+        self._last_run_options: ClipLoopOptions | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -200,6 +202,7 @@ class ClipLoopApp(App[None]):
         yield Static("", id="status")
         with Horizontal(id="action-row"):
             yield Button("Run", variant="primary", id="run")
+            yield Button("Apply last run", id="apply-last", disabled=True)
             yield Button("Quit", id="quit")
         yield Footer()
 
@@ -210,6 +213,20 @@ class ClipLoopApp(App[None]):
             self.query_one("#output-path", Input).value = str(self._initial_output)
         if self._initial_audio is not None:
             self.query_one("#audio-path", Input).value = str(self._initial_audio)
+        self._last_run_options = load_last_run()
+        self._set_last_run_available(self._last_run_options is not None)
+        self._sync_form_visibility()
+        self._progress.on_mount()
+
+    def _set_last_run_available(self, available: bool) -> None:
+        self.query_one("#apply-last", Button).disabled = not available
+
+    def _remember_last_run(self, options: ClipLoopOptions) -> None:
+        self._last_run_options = options
+        save_last_run(options)
+        self._set_last_run_available(True)
+
+    def _sync_form_visibility(self) -> None:
         self._form.sync_crop_options()
         self._form.sync_audio_options()
         self._form.sync_custom_visibility("duration-preset", "duration-custom")
@@ -222,7 +239,6 @@ class ClipLoopApp(App[None]):
             ("seam-fade-preset", "seam-fade-custom"),
         ):
             self._form.sync_custom_visibility(preset_id, custom_id)
-        self._progress.on_mount()
 
     def _set_status(self, message: str) -> None:
         self.query_one("#status", Static).update(message)
@@ -341,6 +357,15 @@ class ClipLoopApp(App[None]):
     def browse_audio(self) -> None:
         self._browse_into_input("#audio-path", self._form.browse_start_dir("#audio-path"))
 
+    @on(Button.Pressed, "#apply-last")
+    def apply_last_pressed(self) -> None:
+        if self._last_run_options is None:
+            return
+        self._clear_validation_highlights()
+        self._form.apply(self._last_run_options)
+        self._sync_form_visibility()
+        self._set_status("Applied settings from last run.")
+
     @on(Button.Pressed, "#quit")
     def quit_pressed(self) -> None:
         self.exit()
@@ -368,6 +393,7 @@ class ClipLoopApp(App[None]):
         self._set_status("")
         self._progress.show()
         options = self._form.collect()
+        self._remember_last_run(options)
         self._run_job_worker(options)
 
     @work(thread=True, exclusive=True)
