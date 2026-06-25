@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from clip_loop.parsing import parse_resolution
+
 
 @dataclass(frozen=True)
 class VideoSegment:
@@ -38,6 +40,8 @@ class ClipLoopOptions:
     audio_crossfade_ms: int = 0
     audio_gap_ms: int = 0
     audio_seam_fade_ms: int = 0
+    target_resolution: tuple[int, int] | None = None
+    fill_mode: str = "fit"
 
     @property
     def input_path(self) -> Path:
@@ -112,6 +116,12 @@ class ClipLoopOptions:
             "audio_crossfade_ms": self.audio_crossfade_ms,
             "audio_gap_ms": self.audio_gap_ms,
             "audio_seam_fade_ms": self.audio_seam_fade_ms,
+            "target_resolution": (
+                f"{self.target_resolution[0]}x{self.target_resolution[1]}"
+                if self.target_resolution
+                else None
+            ),
+            "fill_mode": self.fill_mode,
             "video_input_mode": "multiple" if len(self.video_segments) > 1 else "single",
             "audio_input_mode": "multiple" if len(self.audio_segments) > 1 else "single",
         }
@@ -166,6 +176,10 @@ class ClipLoopOptions:
                         alternate_reverse=bool(data.get("audio_alternate_reverse", False)),
                     ),
                 )
+        target_resolution: tuple[int, int] | None = None
+        if data.get("target_resolution"):
+            target_resolution = parse_resolution(str(data["target_resolution"]))
+
         return cls(
             video_segments=video_segments,
             duration=float(data["duration"]),
@@ -174,6 +188,8 @@ class ClipLoopOptions:
             audio_crossfade_ms=int(data.get("audio_crossfade_ms", 0)),
             audio_gap_ms=int(data.get("audio_gap_ms", 0)),
             audio_seam_fade_ms=int(data.get("audio_seam_fade_ms", 0)),
+            target_resolution=target_resolution,
+            fill_mode=str(data.get("fill_mode", "fit")),
         )
 
     @classmethod

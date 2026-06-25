@@ -16,6 +16,7 @@ from clip_loop.tui.fields import (
     ms_from_select,
     try_parse_duration,
     try_parse_keep_ratio,
+    try_parse_resolution,
     try_parse_speed,
 )
 from clip_loop.tui.form import ClipLoopForm
@@ -53,6 +54,13 @@ class ClipLoopFormValidator:
         if duration_widget:
             highlights.append(duration_widget)
             errors.append("Invalid duration.")
+
+        resolution_select = app.query_one("#resolution-preset", Select)
+        resolution_custom = app.query_one("#resolution-custom", Input)
+        _, resolution_widget = try_parse_resolution(resolution_select, resolution_custom)
+        if resolution_widget:
+            highlights.append(resolution_widget)
+            errors.append("Invalid target resolution.")
 
         for select_id, custom_id, label in (
             ("crossfade-preset", "crossfade-custom", "crossfade"),

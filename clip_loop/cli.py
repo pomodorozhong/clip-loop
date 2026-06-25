@@ -15,6 +15,7 @@ from clip_loop.parsing import (
     parse_crop_corner,
     parse_duration,
     parse_keep_ratio,
+    parse_resolution,
     parse_speed_percent,
 )
 from clip_loop.pipeline import run_clip_loop
@@ -28,6 +29,7 @@ __all__ = [
     "parse_crop_corner",
     "parse_duration",
     "parse_keep_ratio",
+    "parse_resolution",
     "parse_speed_percent",
     "run_clip_loop",
     "validate_clip_loop_options",
@@ -137,6 +139,23 @@ def _add_loop_arguments(p: argparse.ArgumentParser) -> None:
             "With --keep-ratio on a single positional input, corner to remove."
         ),
     )
+    p.add_argument(
+        "--resolution",
+        type=parse_resolution,
+        metavar="WxH",
+        help="Scale video to WIDTHxHEIGHT before looping (e.g. 1920x1080).",
+    )
+    fill_group = p.add_mutually_exclusive_group()
+    fill_group.add_argument(
+        "--fit",
+        action="store_true",
+        help="Letterbox to fit the target resolution (default with --resolution).",
+    )
+    fill_group.add_argument(
+        "--fill",
+        action="store_true",
+        help="Crop to fill the target resolution (requires --resolution).",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -178,6 +197,11 @@ def _namespace_to_options(args: Any, segments: ParsedSegments) -> ClipLoopOption
 
     audio_segments = tuple(segments.audio_segments)
 
+    if (args.fit or args.fill) and args.resolution is None:
+        raise ClipLoopError("--fit and --fill require --resolution.")
+
+    fill_mode = "fill" if args.fill else "fit"
+
     return ClipLoopOptions(
         video_segments=video_segments,
         duration=args.duration,
@@ -186,6 +210,8 @@ def _namespace_to_options(args: Any, segments: ParsedSegments) -> ClipLoopOption
         audio_crossfade_ms=args.audio_crossfade_ms,
         audio_gap_ms=args.audio_gap_ms,
         audio_seam_fade_ms=args.audio_seam_fade_ms,
+        target_resolution=args.resolution,
+        fill_mode=fill_mode,
     )
 
 

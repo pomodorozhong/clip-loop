@@ -157,11 +157,13 @@ class ClipLoopApp(FormHandlersMixin, App[None]):
 
     def _sync_form_visibility(self) -> None:
         self._form.sync_crop_options()
+        self._form.sync_resolution_options()
         self._form.sync_audio_options()
         self._form.sync_custom_visibility("duration-preset", "duration-custom")
         self._form.sync_custom_visibility("trim-preset", "trim-custom")
         self._form.sync_custom_visibility("speed-preset", "speed-custom")
         self._form.sync_custom_visibility("keep-ratio-preset", "keep-ratio-custom")
+        self._form.sync_custom_visibility("resolution-preset", "resolution-custom")
         self._form.sync_custom_visibility("audio-trim-preset", "audio-trim-custom")
         for preset_id, custom_id in (
             ("crossfade-preset", "crossfade-custom"),

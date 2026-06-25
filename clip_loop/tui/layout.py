@@ -9,8 +9,10 @@ from textual.widgets import Button, Checkbox, Input, Select, TabbedContent, TabP
 from clip_loop.tui.constants import (
     CROP_CORNER_PRESETS,
     DURATION_PRESETS,
+    FILL_MODE_PRESETS,
     KEEP_RATIO_PRESETS,
     MS_PRESETS,
+    RESOLUTION_PRESETS,
     SPEED_PRESETS,
 )
 from clip_loop.tui.widgets import (
@@ -43,6 +45,21 @@ def compose_form() -> ComposeResult:
 
     with TabbedContent(id="media-options-tabs"):
         with TabPane("Video", id="media-video-tab"):
+            yield FieldLabel("Target resolution")
+            yield Select(RESOLUTION_PRESETS, id="resolution-preset", value="source")
+            yield PresetInput(
+                placeholder="e.g. 1920x1080",
+                id="resolution-custom",
+                disabled=True,
+            )
+            yield FieldLabel("Fill mode")
+            yield Select(
+                FILL_MODE_PRESETS,
+                id="fill-mode",
+                value="fit",
+                disabled=True,
+            )
+
             with FormGroupBox():
                 yield FormGroupTitle("Video input")
                 with FormGroupBody():

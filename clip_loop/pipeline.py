@@ -18,6 +18,7 @@ from clip_loop.ffmpeg import (
     preprocess_audio_segment,
     preprocess_video_segment,
     run_simple_loop,
+    scale_video_to_target,
 )
 from clip_loop.options import ClipLoopOptions
 from clip_loop.validation import validate_clip_loop_options
@@ -65,23 +66,36 @@ def _resolve_sources(options: ClipLoopOptions) -> tuple[Path, Path | None, list[
     """Preprocess and join segments; return source video, external audio, and temps."""
     temps: list[Path] = []
 
+    video_suffix = options.video_segments[0].path.suffix or ".mp4"
     processed_videos: list[Path] = []
     for segment in options.video_segments:
         path, segment_temps = preprocess_video_segment(segment)
-        processed_videos.append(path)
         temps.extend(segment_temps)
+        if options.target_resolution is not None:
+            path, scale_temps = scale_video_to_target(
+                path,
+                target_resolution=options.target_resolution,
+                fill_mode=options.fill_mode,
+                suffix=video_suffix,
+            )
+            temps.extend(scale_temps)
+        processed_videos.append(path)
 
     if len(processed_videos) == 1:
         source_video = processed_videos[0]
     else:
         fd, tmp_name = tempfile.mkstemp(
-            suffix=options.video_segments[0].path.suffix or ".mp4",
+            suffix=video_suffix,
             prefix="clip_loop_joined_",
         )
         os.close(fd)
         joined_video = Path(tmp_name)
         temps.append(joined_video)
-        concat_video_files(processed_videos, joined_video)
+        concat_video_files(
+            processed_videos,
+            joined_video,
+            uniform_size=options.target_resolution,
+        )
         source_video = joined_video
 
     external_audio: Path | None = None

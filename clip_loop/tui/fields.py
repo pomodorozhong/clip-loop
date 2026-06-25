@@ -7,8 +7,10 @@ import argparse
 from textual.widgets import Input, Select
 
 from clip_loop.parsing import (
+    FILL_MODES,
     parse_duration as parse_duration_text,
     parse_keep_ratio as parse_keep_ratio_text,
+    parse_resolution,
     parse_speed_percent,
 )
 
@@ -28,6 +30,46 @@ def ms_from_select(select: Select[str], custom: Input) -> int:
 def is_crop_enabled(select: Select[str]) -> bool:
     value = select.value
     return value is not Select.BLANK and value != "off"
+
+
+def is_resolution_enabled(select: Select[str]) -> bool:
+    value = select.value
+    return value is not Select.BLANK and value != "source"
+
+
+def try_parse_resolution(
+    select: Select[str], custom: Input
+) -> tuple[tuple[int, int] | None, str | None]:
+    resolution_is_custom = select.value == "custom"
+    try:
+        value = select.value
+        if value is Select.BLANK or value == "source":
+            return None, None
+        if value == "custom":
+            text = custom.value.strip()
+            if not text:
+                return None, "#resolution-custom"
+            return parse_resolution(text), None
+        return parse_resolution(value), None
+    except (ValueError, argparse.ArgumentTypeError):
+        widget_id = "#resolution-custom" if resolution_is_custom else "#resolution-preset"
+        return None, widget_id
+
+
+def parse_resolution_field(select: Select[str], custom: Input) -> tuple[int, int] | None:
+    result, widget = try_parse_resolution(select, custom)
+    if widget:
+        raise ValueError("invalid resolution")
+    return result
+
+
+def parse_fill_mode(select: Select[str]) -> str:
+    value = select.value
+    if value is Select.BLANK:
+        return "fit"
+    if value not in FILL_MODES:
+        raise ValueError("invalid fill mode")
+    return value
 
 
 def try_parse_speed(

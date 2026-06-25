@@ -11,12 +11,15 @@ from clip_loop.options import AudioSegment, ClipLoopOptions, VideoSegment
 from clip_loop.parsing import parse_crop_corner, parse_duration
 from clip_loop.tui.fields import (
     is_crop_enabled,
+    is_resolution_enabled,
     ms_from_select,
     parse_duration_field,
+    parse_fill_mode,
     parse_keep_ratio,
+    parse_resolution_field,
     parse_speed,
 )
-from clip_loop.tui.constants import DURATION_PRESETS
+from clip_loop.tui.constants import DURATION_PRESETS, RESOLUTION_PRESETS
 from clip_loop.tui.segments import (
     AudioSegmentRows,
     VideoSegmentRows,
@@ -124,6 +127,11 @@ class ClipLoopForm:
                 self._app.query_one("#seam-fade-preset", Select),
                 self._app.query_one("#seam-fade-custom", Input),
             ),
+            target_resolution=parse_resolution_field(
+                self._app.query_one("#resolution-preset", Select),
+                self._app.query_one("#resolution-custom", Input),
+            ),
+            fill_mode=parse_fill_mode(self._app.query_one("#fill-mode", Select)),
         )
 
     def duration_is_custom(self) -> bool:
@@ -168,6 +176,17 @@ class ClipLoopForm:
         corner.disabled = not enabled
         if enabled:
             self.sync_custom_visibility("keep-ratio-preset", "keep-ratio-custom")
+        else:
+            custom.display = False
+
+    def sync_resolution_options(self) -> None:
+        enabled = is_resolution_enabled(self._app.query_one("#resolution-preset", Select))
+        custom = self._app.query_one("#resolution-custom")
+        fill_mode = self._app.query_one("#fill-mode")
+        custom.disabled = not enabled
+        fill_mode.disabled = not enabled
+        if enabled:
+            self.sync_custom_visibility("resolution-preset", "resolution-custom")
         else:
             custom.display = False
 
@@ -236,6 +255,33 @@ class ClipLoopForm:
         self._set_ms_field("crossfade-preset", "crossfade-custom", options.audio_crossfade_ms)
         self._set_ms_field("gap-preset", "gap-custom", options.audio_gap_ms)
         self._set_ms_field("seam-fade-preset", "seam-fade-custom", options.audio_seam_fade_ms)
+        self._set_resolution(options.target_resolution, options.fill_mode)
+
+    def _set_resolution(
+        self,
+        resolution: tuple[int, int] | None,
+        fill_mode: str,
+    ) -> None:
+        select = self._app.query_one("#resolution-preset", Select)
+        custom = self._app.query_one("#resolution-custom", Input)
+        fill_select = self._app.query_one("#fill-mode", Select)
+        if resolution is None:
+            select.value = "source"
+            custom.value = ""
+            fill_select.value = "fit"
+            return
+        resolution_text = f"{resolution[0]}x{resolution[1]}"
+        for _, value in RESOLUTION_PRESETS:
+            if value == "custom":
+                continue
+            if value == resolution_text:
+                select.value = value
+                custom.value = ""
+                fill_select.value = fill_mode
+                return
+        select.value = "custom"
+        custom.value = resolution_text
+        fill_select.value = fill_mode
 
     def _set_ms_field(self, preset_id: str, custom_id: str, ms: int) -> None:
         set_ms_field(self._app, f"#{preset_id}", f"#{custom_id}", ms)

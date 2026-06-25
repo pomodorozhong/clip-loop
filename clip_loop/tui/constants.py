@@ -13,6 +13,8 @@ _FIELD_PATTERN = re.compile(
 FIELD_TO_WIDGET: dict[str, str] = {
     "video_segments": "#video-segments-list",
     "duration": "#duration-preset",
+    "target_resolution": "#resolution-preset",
+    "fill_mode": "#fill-mode",
     "audio_crossfade_ms": "#crossfade-preset",
     "audio_gap_ms": "#gap-preset",
     "audio_seam_fade_ms": "#seam-fade-preset",
@@ -83,6 +85,9 @@ HIGHLIGHTABLE_IDS = (
     "#duration-preset",
     "#duration-custom",
     "#output-path",
+    "#resolution-preset",
+    "#resolution-custom",
+    "#fill-mode",
     "#audio-path",
     "#trim-preset",
     "#trim-custom",
@@ -122,6 +127,9 @@ AUDIO_SECTION_IDS = frozenset(
 )
 VIDEO_SECTION_IDS = frozenset(
     {
+        "#resolution-preset",
+        "#resolution-custom",
+        "#fill-mode",
         "#input-path",
         "#trim-preset",
         "#trim-custom",
@@ -176,4 +184,17 @@ SPEED_PRESETS: tuple[tuple[str, str], ...] = (
     ("120%", "120"),
     ("150%", "150"),
     ("Custom…", "custom"),
+)
+
+RESOLUTION_PRESETS: tuple[tuple[str, str], ...] = (
+    ("Source (no scaling)", "source"),
+    ("720p (1280x720)", "1280x720"),
+    ("1080p (1920x1080)", "1920x1080"),
+    ("4K (3840x2160)", "3840x2160"),
+    ("Custom…", "custom"),
+)
+
+FILL_MODE_PRESETS: tuple[tuple[str, str], ...] = (
+    ("Fit (--fit, letterbox)", "fit"),
+    ("Fill (--fill, crop)", "fill"),
 )

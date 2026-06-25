@@ -89,6 +89,11 @@ class FormHandlersMixin:
         self._form.sync_crop_options()
         self._form.sync_custom_visibility("keep-ratio-preset", "keep-ratio-custom")
 
+    @on(Select.Changed, "#resolution-preset")
+    def resolution_preset_changed(self) -> None:
+        self._form.sync_resolution_options()
+        self._form.sync_custom_visibility("resolution-preset", "resolution-custom")
+
     @on(Select.Changed, "#trim-preset")
     def trim_preset_changed(self) -> None:
         self._form.sync_custom_visibility("trim-preset", "trim-custom")

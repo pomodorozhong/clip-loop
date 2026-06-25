@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 
 CROP_CORNERS = frozenset({"top_left", "top_right", "bottom_left", "bottom_right"})
+FILL_MODES = frozenset({"fit", "fill"})
 
 
 def parse_duration(value: str) -> float:
@@ -57,6 +58,34 @@ def parse_speed_percent(value: str) -> float:
     if percent <= 0:
         raise argparse.ArgumentTypeError("speed must be positive")
     return percent
+
+
+def parse_resolution(value: str) -> tuple[int, int]:
+    """Parse resolution: WIDTHxHEIGHT (e.g. 1920x1080). Dimensions are forced even."""
+    s = value.strip().lower().replace(" ", "")
+    if not s:
+        raise argparse.ArgumentTypeError("resolution cannot be empty")
+    if "x" not in s:
+        raise argparse.ArgumentTypeError("resolution must be WIDTHxHEIGHT (e.g. 1920x1080)")
+    width_str, height_str = s.split("x", 1)
+    try:
+        width = int(width_str)
+        height = int(height_str)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "resolution must be WIDTHxHEIGHT with positive integers"
+        ) from exc
+    if width <= 0 or height <= 0:
+        raise argparse.ArgumentTypeError("resolution width and height must be positive")
+    return width & ~1, height & ~1
+
+
+def parse_fill_mode(value: str) -> str:
+    mode = value.strip().lower()
+    if mode not in FILL_MODES:
+        choices = ", ".join(sorted(FILL_MODES))
+        raise argparse.ArgumentTypeError(f"fill mode must be one of: {choices}")
+    return mode
 
 
 def format_elapsed(seconds: float) -> str:

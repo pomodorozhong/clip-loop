@@ -5,6 +5,7 @@ from __future__ import annotations
 from clip_loop.errors import ClipLoopError
 from clip_loop.media import validate_crop_geometry
 from clip_loop.options import AudioSegment, ClipLoopOptions, VideoSegment
+from clip_loop.parsing import FILL_MODES
 
 
 def _video_field(name: str, index: int) -> str:
@@ -122,4 +123,14 @@ def validate_clip_loop_options(
         raise ClipLoopError(
             "Audio seam fade requires at least one audio input.",
             field="audio_seam_fade_ms",
+        )
+    if options.fill_mode not in FILL_MODES:
+        raise ClipLoopError(
+            f"Fill mode must be one of: {', '.join(sorted(FILL_MODES))}.",
+            field="fill_mode",
+        )
+    if options.target_resolution is None and options.fill_mode != "fit":
+        raise ClipLoopError(
+            "Fill mode requires a target resolution.",
+            field="fill_mode",
         )

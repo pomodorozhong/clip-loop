@@ -26,6 +26,88 @@ def default_crop_output_path(input_path: Path) -> Path:
 
 from clip_loop.errors import ClipLoopError
 from clip_loop.media import compute_crop_rect, ffprobe_video_size, validate_crop_geometry
+from clip_loop.parsing import FILL_MODES
+
+
+def build_scale_filter(width: int, height: int, fill_mode: str) -> str:
+    """Build an ffmpeg video filter that scales to width×height."""
+    if fill_mode not in FILL_MODES:
+        raise ValueError(f"fill mode must be one of: {', '.join(sorted(FILL_MODES))}")
+    if fill_mode == "fit":
+        return (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1"
+        )
+    return (
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height}:(iw-ow)/2:(ih-oh)/2,setsar=1"
+    )
+
+
+def run_scale_video(
+    input_path: Path,
+    output_path: Path,
+    width: int,
+    height: int,
+    *,
+    fill_mode: str = "fit",
+) -> None:
+    """Re-encode video (and copy or pass through audio) to the target resolution."""
+    ensure_ffmpeg()
+    has_audio = ffprobe_has_audio(input_path)
+    filt = build_scale_filter(width, height, fill_mode)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(input_path),
+        "-vf",
+        filt,
+        "-map",
+        "0:v:0",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+    ]
+    if has_audio:
+        cmd.extend(["-map", "0:a:0", "-c:a", "copy"])
+    else:
+        cmd.append("-an")
+    cmd.append(str(output_path))
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise ClipLoopError(
+            "ffmpeg failed while scaling video. "
+            "Check that the file is a supported video format."
+        ) from exc
+
+
+def scale_video_to_target(
+    input_path: Path,
+    *,
+    target_resolution: tuple[int, int],
+    fill_mode: str,
+    suffix: str = ".mp4",
+) -> tuple[Path, list[Path]]:
+    """Scale one clip to the target resolution; return the path and temps to clean up."""
+    width, height = target_resolution
+    current_w, current_h = ffprobe_video_size(input_path)
+    if (current_w, current_h) == (width, height):
+        return input_path, []
+    temp = _make_temp_video_path(suffix)
+    run_scale_video(input_path, temp, width, height, fill_mode=fill_mode)
+    return temp, [temp]
 
 
 def ffprobe_has_audio(path: Path) -> bool:
@@ -662,12 +744,20 @@ def _ffprobe_video_duration_sec(path: Path) -> float:
     return float(value)
 
 
-def concat_video_files(paths: list[Path], output_path: Path) -> None:
+def concat_video_files(
+    paths: list[Path],
+    output_path: Path,
+    *,
+    uniform_size: tuple[int, int] | None = None,
+) -> None:
     """Concatenate videos (re-encode) to a common size and codec."""
     if len(paths) < 2:
         raise ValueError("concat_video_files requires at least two inputs")
     ensure_ffmpeg()
-    width, height = ffprobe_video_size(paths[0])
+    if uniform_size is not None:
+        width, height = uniform_size
+    else:
+        width, height = ffprobe_video_size(paths[0])
     has_any_audio = any(ffprobe_has_audio(path) for path in paths)
 
     inputs: list[str] = []
@@ -678,10 +768,13 @@ def concat_video_files(paths: list[Path], output_path: Path) -> None:
     concat_inputs: list[str] = []
     for index, path in enumerate(paths):
         vlabel = f"v{index}"
-        filter_parts.append(
-            f"[{index}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
-            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[{vlabel}]"
-        )
+        if uniform_size is not None:
+            filter_parts.append(f"[{index}:v]setsar=1[{vlabel}]")
+        else:
+            filter_parts.append(
+                f"[{index}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[{vlabel}]"
+            )
         if has_any_audio:
             if ffprobe_has_audio(path):
                 alabel = f"a{index}"
