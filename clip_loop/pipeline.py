@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -52,12 +51,11 @@ def loop_video_with_optional_audio(
             audio_seam_fade_sec=audio_seam_fade_sec,
         )
         apply_external_audio(temp_video_path, output_path, audio_source_path, duration_sec)
-    except (subprocess.CalledProcessError, ValueError):
-        sys.stderr.write(
+    except (subprocess.CalledProcessError, ValueError) as exc:
+        raise ClipLoopError(
             "ffmpeg failed while applying external audio. "
-            "Check that the audio file is a supported format.\n"
-        )
-        sys.exit(1)
+            "Check that the audio file is a supported format."
+        ) from exc
     finally:
         temp_video_path.unlink(missing_ok=True)
         cleanup_temp_paths(audio_temp_paths)

@@ -8,14 +8,15 @@ from typing import Protocol
 from textual.widgets import Checkbox, Input, Select, TabbedContent
 
 from clip_loop.options import AudioSegment, ClipLoopOptions, VideoSegment
-from clip_loop.parsing import parse_crop_corner, parse_duration, parse_keep_ratio, parse_speed_percent
-from clip_loop.tui.constants import (
-    DURATION_PRESETS,
-    KEEP_RATIO_PRESETS,
-    MS_PRESETS,
-    SPEED_PRESETS,
+from clip_loop.parsing import parse_crop_corner, parse_duration
+from clip_loop.tui.fields import (
+    is_crop_enabled,
+    ms_from_select,
+    parse_duration_field,
+    parse_keep_ratio,
+    parse_speed,
 )
-from clip_loop.tui.fields import is_crop_enabled, ms_from_select
+from clip_loop.tui.constants import DURATION_PRESETS
 from clip_loop.tui.segments import (
     AudioSegmentRows,
     VideoSegmentRows,
@@ -29,34 +30,6 @@ class FormWidgets(Protocol):
     """Minimal widget query surface used by :class:`ClipLoopForm`."""
 
     def query_one(self, selector: str, expect_type: type): ...
-
-
-def duration_from_form(select: Select[str], custom: Input) -> float:
-    value = select.value
-    if value is Select.BLANK or value == "custom":
-        text = custom.value.strip() or "1h"
-        return parse_duration(text)
-    return parse_duration(value)
-
-
-def keep_ratio_from_form(select: Select[str], custom: Input) -> float:
-    value = select.value
-    if value is Select.BLANK or value == "off":
-        raise ValueError("crop is disabled")
-    if value == "custom":
-        text = custom.value.strip() or "80%"
-        return parse_keep_ratio(text)
-    return parse_keep_ratio(value)
-
-
-def speed_from_form(select: Select[str], custom: Input) -> float:
-    value = select.value
-    if value is Select.BLANK or value == "100":
-        return 100.0
-    if value == "custom":
-        text = custom.value.strip() or "100"
-        return parse_speed_percent(text)
-    return parse_speed_percent(value)
 
 
 class ClipLoopForm:
@@ -86,7 +59,7 @@ class ClipLoopForm:
             keep_ratio: float | None = None
             crop_corner: str | None = None
             if is_crop_enabled(keep_ratio_select):
-                keep_ratio = keep_ratio_from_form(
+                keep_ratio = parse_keep_ratio(
                     keep_ratio_select,
                     self._app.query_one("#keep-ratio-custom", Input),
                 )
@@ -100,7 +73,7 @@ class ClipLoopForm:
                         self._app.query_one("#trim-preset", Select),
                         self._app.query_one("#trim-custom", Input),
                     ),
-                    speed_percent=speed_from_form(
+                    speed_percent=parse_speed(
                         self._app.query_one("#speed-preset", Select),
                         self._app.query_one("#speed-custom", Input),
                     ),
@@ -133,7 +106,7 @@ class ClipLoopForm:
 
         return ClipLoopOptions(
             video_segments=video_segments,
-            duration=duration_from_form(
+            duration=parse_duration_field(
                 self._app.query_one("#duration-preset", Select),
                 self._app.query_one("#duration-custom", Input),
             ),
@@ -306,23 +279,3 @@ def _format_duration(duration: float) -> str:
     if duration == int(duration):
         return str(int(duration))
     return str(duration)
-
-
-def widget_for_clip_loop_error(message: str, *, duration_is_custom: bool) -> str:
-    if "Input not found" in message or "video input" in message.lower():
-        return "#input-path"
-    if "Audio input not found" in message:
-        return "#audio-path"
-    if "requires at least one --audio" in message:
-        return "#audio-path"
-    if "Duration must be positive" in message or "duration cannot be empty" in message:
-        return "#duration-custom" if duration_is_custom else "#duration-preset"
-    if "keep ratio" in message.lower():
-        return "#keep-ratio-custom" if "custom" in message else "#keep-ratio-preset"
-    if "speed" in message.lower():
-        return "#speed-custom" if "custom" in message else "#speed-preset"
-    if "--corner" in message or "corner must be" in message.lower():
-        return "#crop-corner"
-    if "Invalid crop" in message:
-        return "#keep-ratio-preset"
-    return "#input-path"

@@ -85,17 +85,96 @@ class ClipLoopOptions:
             "audio_alternate_reverse is only defined for a single audio segment"
         )
 
-    def as_run_kwargs(self) -> dict:
-        """Keyword arguments for :func:`clip_loop.pipeline.run_clip_loop`."""
+    def to_dict(self) -> dict:
+        """Serialize options for persistence (e.g. last-run JSON)."""
         return {
-            "video_segments": self.video_segments,
+            "video_segments": [
+                {
+                    "path": str(segment.path),
+                    "trim_start_ms": segment.trim_start_ms,
+                    "speed_percent": segment.speed_percent,
+                    "keep_ratio": segment.keep_ratio,
+                    "crop_corner": segment.crop_corner,
+                    "alternate_reverse": segment.alternate_reverse,
+                }
+                for segment in self.video_segments
+            ],
+            "audio_segments": [
+                {
+                    "path": str(segment.path),
+                    "trim_start_ms": segment.trim_start_ms,
+                    "alternate_reverse": segment.alternate_reverse,
+                }
+                for segment in self.audio_segments
+            ],
             "duration": self.duration,
-            "output_path": self.output_path,
-            "audio_segments": self.audio_segments,
+            "output_path": str(self.output_path) if self.output_path else None,
             "audio_crossfade_ms": self.audio_crossfade_ms,
             "audio_gap_ms": self.audio_gap_ms,
             "audio_seam_fade_ms": self.audio_seam_fade_ms,
+            "video_input_mode": "multiple" if len(self.video_segments) > 1 else "single",
+            "audio_input_mode": "multiple" if len(self.audio_segments) > 1 else "single",
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ClipLoopOptions:
+        """Deserialize options from a dict (supports legacy flat format)."""
+        if "video_segments" in data:
+            video_segments = tuple(
+                VideoSegment(
+                    path=Path(item["path"]),
+                    trim_start_ms=int(item.get("trim_start_ms", 0)),
+                    speed_percent=float(item.get("speed_percent", 100.0)),
+                    keep_ratio=(
+                        float(item["keep_ratio"])
+                        if item.get("keep_ratio") is not None
+                        else None
+                    ),
+                    crop_corner=item.get("crop_corner"),
+                    alternate_reverse=bool(item.get("alternate_reverse", False)),
+                )
+                for item in data["video_segments"]
+            )
+            audio_segments = tuple(
+                AudioSegment(
+                    path=Path(item["path"]),
+                    trim_start_ms=int(item.get("trim_start_ms", 0)),
+                    alternate_reverse=bool(item.get("alternate_reverse", False)),
+                )
+                for item in data.get("audio_segments", [])
+            )
+        else:
+            video_segments = (
+                VideoSegment(
+                    path=Path(data["input_path"]),
+                    trim_start_ms=int(data.get("trim_start_ms", 0)),
+                    speed_percent=float(data.get("speed_percent", 100.0)),
+                    keep_ratio=(
+                        float(data["keep_ratio"])
+                        if data.get("keep_ratio") is not None
+                        else None
+                    ),
+                    crop_corner=data.get("crop_corner"),
+                    alternate_reverse=bool(data.get("alternate_reverse", False)),
+                ),
+            )
+            audio_segments = ()
+            if data.get("audio_path"):
+                audio_segments = (
+                    AudioSegment(
+                        path=Path(data["audio_path"]),
+                        alternate_reverse=bool(data.get("audio_alternate_reverse", False)),
+                    ),
+                )
+        return cls(
+            video_segments=video_segments,
+            duration=float(data["duration"]),
+            output_path=Path(data["output_path"]) if data.get("output_path") else None,
+            audio_segments=audio_segments,
+            audio_crossfade_ms=int(data.get("audio_crossfade_ms", 0)),
+            audio_gap_ms=int(data.get("audio_gap_ms", 0)),
+            audio_seam_fade_ms=int(data.get("audio_seam_fade_ms", 0)),
+        )
 
     @classmethod
     def from_legacy(

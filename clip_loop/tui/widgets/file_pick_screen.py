@@ -1,4 +1,4 @@
-"""Modal screens for the clip-loop TUI."""
+"""File picker modal screen."""
 
 from __future__ import annotations
 
@@ -14,6 +14,17 @@ class FilePickScreen(ModalScreen[Path | None]):
     """Pick a file from the filesystem."""
 
     BINDINGS = [("escape", "dismiss", "Cancel")]
+
+    DEFAULT_CSS = """
+    FilePickScreen DirectoryTree {
+        height: 1fr;
+    }
+    .pick-actions {
+        height: auto;
+        padding: 1;
+        align: center middle;
+    }
+    """
 
     def __init__(self, start: Path | None = None) -> None:
         super().__init__()

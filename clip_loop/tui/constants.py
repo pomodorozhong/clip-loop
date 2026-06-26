@@ -1,6 +1,82 @@
 """TUI widget IDs, presets, and styling constants."""
 
+from __future__ import annotations
+
+import re
+
 INVALID_CLASS = "-invalid"
+
+_FIELD_PATTERN = re.compile(
+    r"^(video_segments|audio_segments)\[(\d+)\]\.(\w+)$"
+)
+
+FIELD_TO_WIDGET: dict[str, str] = {
+    "video_segments": "#video-segments-list",
+    "duration": "#duration-preset",
+    "audio_crossfade_ms": "#crossfade-preset",
+    "audio_gap_ms": "#gap-preset",
+    "audio_seam_fade_ms": "#seam-fade-preset",
+    "video_segments[0].path": "#input-path",
+    "video_segments[0].trim_start_ms": "#trim-preset",
+    "video_segments[0].speed_percent": "#speed-preset",
+    "video_segments[0].keep_ratio": "#keep-ratio-preset",
+    "video_segments[0].crop_corner": "#crop-corner",
+    "audio_segments[0].path": "#audio-path",
+    "audio_segments[0].trim_start_ms": "#audio-trim-preset",
+}
+
+_VIDEO_SEGMENT_WIDGET_SUFFIX = {
+    "path": "-path",
+    "trim_start_ms": "-trim-preset",
+    "speed_percent": "-speed-preset",
+    "keep_ratio": "-keep-ratio-preset",
+    "crop_corner": "-crop-corner",
+}
+
+_AUDIO_SEGMENT_WIDGET_SUFFIX = {
+    "path": "-path",
+    "trim_start_ms": "-trim-preset",
+}
+
+
+def widget_for_field(
+    field: str | None,
+    *,
+    video_multiple: bool,
+    audio_multiple: bool,
+    segment_index: int | None = None,
+    duration_is_custom: bool = False,
+) -> str:
+    """Map a validation field code to a TUI widget selector."""
+    if field is None:
+        return "#input-path"
+    if field == "duration" and duration_is_custom:
+        return "#duration-custom"
+    if not video_multiple and not audio_multiple and field in FIELD_TO_WIDGET:
+        return FIELD_TO_WIDGET[field]
+    if field == "video_segments":
+        return "#video-segments-list"
+    match = _FIELD_PATTERN.match(field)
+    if match:
+        group, index_str, attr = match.groups()
+        index = segment_index if segment_index is not None else int(index_str)
+        if group == "video_segments":
+            if video_multiple:
+                suffix = _VIDEO_SEGMENT_WIDGET_SUFFIX.get(attr, "-path")
+                return f"#video-seg-{index}{suffix}"
+            single_field = f"video_segments[0].{attr}"
+            if single_field in FIELD_TO_WIDGET:
+                return FIELD_TO_WIDGET[single_field]
+        if group == "audio_segments":
+            if audio_multiple:
+                suffix = _AUDIO_SEGMENT_WIDGET_SUFFIX.get(attr, "-path")
+                return f"#audio-seg-{index}{suffix}"
+            single_field = f"audio_segments[0].{attr}"
+            if single_field in FIELD_TO_WIDGET:
+                return FIELD_TO_WIDGET[single_field]
+    if field in FIELD_TO_WIDGET:
+        return FIELD_TO_WIDGET[field]
+    return "#input-path"
 
 HIGHLIGHTABLE_IDS = (
     "#input-path",
@@ -101,171 +177,3 @@ SPEED_PRESETS: tuple[tuple[str, str], ...] = (
     ("150%", "150"),
     ("Custom…", "custom"),
 )
-
-APP_CSS = """
-Screen {
-    layout: vertical;
-}
-VerticalScroll {
-    height: 1fr;
-    padding: 0 1;
-}
-.field-label {
-    margin-top: 1;
-    text-style: bold;
-}
-.field-row {
-    height: auto;
-    margin-bottom: 1;
-}
-.field-row Input {
-    width: 1fr;
-}
-.groupbox {
-    border: round $primary;
-    padding: 0 2;
-    margin: 1 0;
-    height: auto;
-}
-.groupbox-title {
-    text-style: bold;
-    margin-bottom: 1;
-}
-.groupbox-body {
-    padding-left: 1;
-    height: auto;
-}
-Input.-invalid {
-    border: tall $error;
-}
-Select.-invalid {
-    border: tall $error;
-}
-Collapsible {
-    margin: 1 0;
-    border: solid $primary;
-    padding: 0 1 1 1;
-}
-TabbedContent {
-    margin-bottom: 1;
-    height: auto;
-}
-TabbedContent > ContentSwitcher {
-    height: auto;
-}
-TabPane {
-    height: auto;
-    padding: 0 0 1 0;
-}
-#video-segments-list, #audio-segments-list {
-    height: auto;
-}
-VideoSegmentRow, AudioSegmentRow {
-    height: auto;
-}
-VideoSegmentRow Select, AudioSegmentRow Select {
-    width: 1fr;
-}
-.segment-row {
-    border: solid $surface-lighten-1;
-    padding: 0 1 1 1;
-    margin: 1 0;
-    height: auto;
-}
-VideoSegmentRow.segment-row, AudioSegmentRow.segment-row {
-    border: solid $primary;
-    padding: 0;
-}
-.segment-header {
-    height: 3;
-    align: left middle;
-    align-vertical: middle;
-    padding: 0 1;
-    margin-bottom: 0;
-}
-.segment-title {
-    width: 1fr;
-    text-style: bold;
-    margin-top: 1;
-}
-.segment-toggle {
-    width: 3;
-    text-style: bold;
-    margin-top: 1;
-}
-.segment-content {
-    padding: 1 2;
-    height: auto;
-}
-.segment-row.-collapsed .segment-content {
-    display: none;
-}
-.hidden-custom {
-    display: none;
-}
-.segment-add-row {
-    height: auto;
-    align: right middle;
-}
-.segment-add {
-
-}
-.segment-remove {
-    # min-width: 10;
-    # height: 1;
-
-}
-#run-progress {
-    display: none;
-    height: auto;
-    margin: 0 1;
-    padding: 1;
-    border: solid $primary;
-    background: $surface;
-}
-#run-progress.visible {
-    display: block;
-}
-.run-progress-row {
-    height: auto;
-    align: left middle;
-}
-#run-spinner {
-    width: auto;
-    height: 3;
-    min-height: 3;
-    margin-right: 1;
-}
-.run-progress-text {
-    height: auto;
-    width: 1fr;
-}
-#run-message {
-    text-style: bold;
-}
-#run-timer {
-    color: $accent;
-    margin-top: 1;
-}
-#status {
-    height: auto;
-    padding: 0 1;
-    color: $warning;
-}
-#action-row {
-    height: auto;
-    padding: 0 1 1 1;
-    align: center middle;
-}
-#action-row Button {
-    margin-right: 1;
-}
-FilePickScreen DirectoryTree {
-    height: 1fr;
-}
-.pick-actions {
-    height: auto;
-    padding: 1;
-    align: center middle;
-}
-"""
