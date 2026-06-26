@@ -14,6 +14,7 @@ from clip_loop.ffmpeg import (
     concat_audio_files,
     concat_video_files,
     default_output_path,
+    unique_output_path,
     prepare_audio_source,
     preprocess_audio_segment,
     preprocess_video_segment,
@@ -134,7 +135,7 @@ def run_clip_loop(options: ClipLoopOptions | None = None, /, **kwargs) -> Path:
     audio_crossfade_sec = options.audio_crossfade_ms / 1000.0
     audio_gap_sec = options.audio_gap_ms / 1000.0
     audio_seam_fade_sec = options.audio_seam_fade_ms / 1000.0
-    resolved_output = (
+    resolved_output = unique_output_path(
         options.output_path
         if options.output_path
         else default_output_path(options.input_path)

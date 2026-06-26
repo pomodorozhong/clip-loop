@@ -44,7 +44,7 @@ clip-loop [-h] [--tui] [-d DURATION] [-o PATH] [--alternate-reverse] [--trim-sta
 |----------|-------------|
 | `input` | Path to a single source video (legacy mode). Cannot be combined with `--video`. |
 | `-d`, `--duration` | Target length of the output. Default is **1 hour** (`1h`). |
-| `-o`, `--output` | Output file path. Default is `<input_stem>_looped<suffix>` next to the first input. |
+| `-o`, `--output` | Output file path. Default is `<input_stem>_looped<suffix>` next to the first input. If the target path already exists, a timestamp is appended to avoid overwriting (e.g. `video_looped_20250626_143022.mp4`). |
 | `--alternate-reverse` | With a single positional `input`, ping-pong that video. Use `--video-alternate-reverse` per `--video` in multi-clip mode. |
 | `--trim-start-ms N` | With a single positional `input`, skip the first **N** ms. Use `--video-trim-start-ms` per `--video` in multi-clip mode. |
 | `--speed PERCENT` | With a single positional `input`, playback speed. Use `--video-speed` per `--video` in multi-clip mode. |

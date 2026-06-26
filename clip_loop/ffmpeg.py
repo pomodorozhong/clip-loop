@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 
@@ -18,6 +19,19 @@ def ensure_ffmpeg() -> None:
 
 def default_output_path(input_path: Path) -> Path:
     return input_path.with_name(f"{input_path.stem}_looped{input_path.suffix}")
+
+
+def unique_output_path(path: Path) -> Path:
+    """Return path, or a timestamp-suffixed variant if it already exists."""
+    if not path.exists():
+        return path
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidate = path.with_name(f"{path.stem}_{timestamp}{path.suffix}")
+    counter = 0
+    while candidate.exists():
+        counter += 1
+        candidate = path.with_name(f"{path.stem}_{timestamp}_{counter}{path.suffix}")
+    return candidate
 
 
 def default_crop_output_path(input_path: Path) -> Path:
