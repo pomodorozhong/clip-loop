@@ -501,6 +501,7 @@ def run_crop_video(
     keep_ratio: float,
     corner: str,
     output_path: Path | None = None,
+    trim_start_sec: float = 0.0,
 ) -> Path:
     """Crop away a corner, scale back to original size, and return the output path."""
     from clip_loop.validation import validate_crop_options
@@ -516,12 +517,17 @@ def run_crop_video(
     resolved_output = output_path if output_path else default_crop_output_path(input_path)
     has_audio = ffprobe_has_audio(input_path)
     filt = f"crop={crop_w}:{crop_h}:{x}:{y},scale={width}:{height}"
-    cmd = [
+    head = [
         "ffmpeg",
         "-y",
         "-hide_banner",
         "-loglevel",
         "error",
+    ]
+    if trim_start_sec > 0:
+        head.extend(["-ss", str(trim_start_sec)])
+    cmd = [
+        *head,
         "-i",
         str(input_path),
         "-vf",
@@ -561,10 +567,300 @@ def _make_temp_audio_path() -> Path:
     return Path(tmp_name)
 
 
+def _make_temp_video_path(suffix: str = ".mp4") -> Path:
+    fd, tmp_name = tempfile.mkstemp(suffix=suffix, prefix="clip_loop_")
+    os.close(fd)
+    return Path(tmp_name)
+
+
+def trim_video_copy(input_path: Path, output_path: Path, trim_start_sec: float) -> None:
+    """Copy video (and embedded audio) from a trim point to the end."""
+    ensure_ffmpeg()
+    head = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        str(trim_start_sec),
+        "-i",
+        str(input_path),
+        "-c",
+        "copy",
+        str(output_path),
+    ]
+    subprocess.run(head, check=True)
+
+
+def trim_audio_copy(input_path: Path, output_path: Path, trim_start_sec: float) -> None:
+    """Copy audio from a trim point to the end."""
+    ensure_ffmpeg()
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        str(trim_start_sec),
+        "-i",
+        str(input_path),
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        str(output_path),
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def preprocess_video_segment(segment) -> tuple[Path, list[Path]]:
+    """Apply per-segment video transforms; return output path and temps to clean up."""
+    from clip_loop.options import VideoSegment
+
+    if not isinstance(segment, VideoSegment):
+        raise TypeError(f"expected VideoSegment, got {type(segment)!r}")
+
+    temps: list[Path] = []
+    current = segment.path
+    trim_sec = segment.trim_start_ms / 1000.0
+
+    if segment.keep_ratio is not None and segment.crop_corner is not None:
+        temp = _make_temp_video_path(current.suffix or ".mp4")
+        temps.append(temp)
+        run_crop_video(
+            input_path=current,
+            keep_ratio=segment.keep_ratio,
+            corner=segment.crop_corner,
+            output_path=temp,
+            trim_start_sec=trim_sec,
+        )
+        current = temp
+        trim_sec = 0.0
+
+    if segment.speed_percent != 100.0:
+        temp = _make_temp_video_path(current.suffix or ".mp4")
+        temps.append(temp)
+        run_speed_adjust(
+            current,
+            temp,
+            segment.speed_percent,
+            trim_start_sec=trim_sec,
+        )
+        current = temp
+        trim_sec = 0.0
+    elif trim_sec > 0:
+        temp = _make_temp_video_path(current.suffix or ".mp4")
+        temps.append(temp)
+        trim_video_copy(current, temp, trim_sec)
+        current = temp
+        trim_sec = 0.0
+
+    if segment.alternate_reverse:
+        temp = _make_temp_video_path(current.suffix or ".mp4")
+        temps.append(temp)
+        build_forward_reverse_cycle(
+            current,
+            temp,
+            has_audio=ffprobe_has_audio(current),
+            trim_start_sec=trim_sec,
+        )
+        current = temp
+
+    return current, temps
+
+
+def preprocess_audio_segment(segment) -> tuple[Path, list[Path]]:
+    """Apply per-segment audio transforms; return output path and temps to clean up."""
+    from clip_loop.options import AudioSegment
+
+    if not isinstance(segment, AudioSegment):
+        raise TypeError(f"expected AudioSegment, got {type(segment)!r}")
+
+    temps: list[Path] = []
+    current = segment.path
+    trim_sec = segment.trim_start_ms / 1000.0
+
+    if trim_sec > 0:
+        temp = _make_temp_audio_path()
+        temps.append(temp)
+        trim_audio_copy(current, temp, trim_sec)
+        current = temp
+
+    if segment.alternate_reverse:
+        temp = _make_temp_audio_path()
+        temps.append(temp)
+        build_forward_reverse_audio_cycle(current, temp)
+        current = temp
+
+    return current, temps
+
+
+def _ffprobe_video_duration_sec(path: Path) -> float:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    value = r.stdout.strip()
+    if not value:
+        raise ValueError(f"ffprobe could not determine video duration: {path}")
+    return float(value)
+
+
+def concat_video_files(paths: list[Path], output_path: Path) -> None:
+    """Concatenate videos (re-encode) to a common size and codec."""
+    if len(paths) < 2:
+        raise ValueError("concat_video_files requires at least two inputs")
+    ensure_ffmpeg()
+    width, height = ffprobe_video_size(paths[0])
+    has_any_audio = any(ffprobe_has_audio(path) for path in paths)
+
+    inputs: list[str] = []
+    for path in paths:
+        inputs.extend(["-i", str(path)])
+
+    filter_parts: list[str] = []
+    concat_inputs: list[str] = []
+    for index, path in enumerate(paths):
+        vlabel = f"v{index}"
+        filter_parts.append(
+            f"[{index}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[{vlabel}]"
+        )
+        if has_any_audio:
+            if ffprobe_has_audio(path):
+                alabel = f"a{index}"
+                filter_parts.append(
+                    f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo[{alabel}]"
+                )
+                concat_inputs.append(f"[{vlabel}][{alabel}]")
+            else:
+                duration = _ffprobe_video_duration_sec(path)
+                alabel = f"a{index}"
+                filter_parts.append(
+                    f"anullsrc=r=48000:cl=stereo,atrim=0:{duration},asetpts=PTS-STARTPTS[{alabel}]"
+                )
+                concat_inputs.append(f"[{vlabel}][{alabel}]")
+        else:
+            concat_inputs.append(f"[{vlabel}]")
+
+    n = len(paths)
+    if has_any_audio:
+        filt = ";".join(filter_parts)
+        filt += f";{''.join(concat_inputs)}concat=n={n}:v=1:a=1[outv][outa]"
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            *inputs,
+            "-filter_complex",
+            filt,
+            "-map",
+            "[outv]",
+            "-map",
+            "[outa]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+    else:
+        filt = ";".join(filter_parts)
+        filt += f";{''.join(concat_inputs)}concat=n={n}:v=1:a=0[outv]"
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            *inputs,
+            "-filter_complex",
+            filt,
+            "-map",
+            "[outv]",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+    subprocess.run(cmd, check=True)
+
+
+def concat_audio_files(paths: list[Path], output_path: Path) -> None:
+    """Concatenate audio files into one track."""
+    if len(paths) < 2:
+        raise ValueError("concat_audio_files requires at least two inputs")
+    ensure_ffmpeg()
+    inputs: list[str] = []
+    for path in paths:
+        inputs.extend(["-i", str(path)])
+
+    filter_parts: list[str] = []
+    concat_inputs: list[str] = []
+    for index in range(len(paths)):
+        label = f"a{index}"
+        filter_parts.append(
+            f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo[{label}]"
+        )
+        concat_inputs.append(f"[{label}]")
+
+    n = len(paths)
+    filt = ";".join(filter_parts)
+    filt += f";{''.join(concat_inputs)}concat=n={n}:v=0:a=1[outa]"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        *inputs,
+        "-filter_complex",
+        filt,
+        "-map",
+        "[outa]",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        str(output_path),
+    ]
+    subprocess.run(cmd, check=True)
+
+
 def prepare_audio_source(
     external_audio_path: Path,
     *,
-    audio_alternate_reverse: bool = False,
     audio_crossfade_sec: float = 0.0,
     audio_gap_sec: float = 0.0,
     audio_seam_fade_sec: float = 0.0,
@@ -572,12 +868,6 @@ def prepare_audio_source(
     """Build a loopable audio cycle; return the source path and temps to clean up."""
     temp_paths: list[Path] = []
     audio_source_path = external_audio_path
-
-    if audio_alternate_reverse:
-        temp_audio_cycle_path = _make_temp_audio_path()
-        temp_paths.append(temp_audio_cycle_path)
-        build_forward_reverse_audio_cycle(external_audio_path, temp_audio_cycle_path)
-        audio_source_path = temp_audio_cycle_path
 
     if audio_gap_sec > 0:
         temp_audio_gap_cycle_path = _make_temp_audio_path()

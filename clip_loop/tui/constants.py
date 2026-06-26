@@ -15,28 +15,38 @@ HIGHLIGHTABLE_IDS = (
     "#keep-ratio-preset",
     "#keep-ratio-custom",
     "#crop-corner",
+    "#alternate-reverse",
+    "#audio-trim-preset",
+    "#audio-trim-custom",
+    "#audio-alternate-reverse",
     "#crossfade-preset",
     "#crossfade-custom",
     "#gap-preset",
     "#gap-custom",
     "#seam-fade-preset",
     "#seam-fade-custom",
+    "#video-segments-list",
+    "#audio-segments-list",
 )
 
 AUDIO_SECTION_IDS = frozenset(
     {
         "#audio-path",
         "#audio-alternate-reverse",
+        "#audio-trim-preset",
+        "#audio-trim-custom",
         "#crossfade-preset",
         "#crossfade-custom",
         "#gap-preset",
         "#gap-custom",
         "#seam-fade-preset",
         "#seam-fade-custom",
+        "#audio-segments-list",
     }
 )
 VIDEO_SECTION_IDS = frozenset(
     {
+        "#input-path",
         "#trim-preset",
         "#trim-custom",
         "#speed-preset",
@@ -44,6 +54,8 @@ VIDEO_SECTION_IDS = frozenset(
         "#keep-ratio-preset",
         "#keep-ratio-custom",
         "#crop-corner",
+        "#alternate-reverse",
+        "#video-segments-list",
     }
 )
 
@@ -109,6 +121,20 @@ VerticalScroll {
 .field-row Input {
     width: 1fr;
 }
+.groupbox {
+    border: round $primary;
+    padding: 0 2;
+    margin: 1 0;
+    height: auto;
+}
+.groupbox-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+.groupbox-body {
+    padding-left: 1;
+    height: auto;
+}
 Input.-invalid {
     border: tall $error;
 }
@@ -119,6 +145,75 @@ Collapsible {
     margin: 1 0;
     border: solid $primary;
     padding: 0 1 1 1;
+}
+TabbedContent {
+    margin-bottom: 1;
+    height: auto;
+}
+TabbedContent > ContentSwitcher {
+    height: auto;
+}
+TabPane {
+    height: auto;
+    padding: 0 0 1 0;
+}
+#video-segments-list, #audio-segments-list {
+    height: auto;
+}
+VideoSegmentRow, AudioSegmentRow {
+    height: auto;
+}
+VideoSegmentRow Select, AudioSegmentRow Select {
+    width: 1fr;
+}
+.segment-row {
+    border: solid $surface-lighten-1;
+    padding: 0 1 1 1;
+    margin: 1 0;
+    height: auto;
+}
+VideoSegmentRow.segment-row, AudioSegmentRow.segment-row {
+    border: solid $primary;
+    padding: 0;
+}
+.segment-header {
+    height: 3;
+    align: left middle;
+    align-vertical: middle;
+    padding: 0 1;
+    margin-bottom: 0;
+}
+.segment-title {
+    width: 1fr;
+    text-style: bold;
+    margin-top: 1;
+}
+.segment-toggle {
+    width: 3;
+    text-style: bold;
+    margin-top: 1;
+}
+.segment-content {
+    padding: 1 2;
+    height: auto;
+}
+.segment-row.-collapsed .segment-content {
+    display: none;
+}
+.hidden-custom {
+    display: none;
+}
+.segment-add-row {
+    height: auto;
+    align: right middle;
+}
+.segment-add {
+
+}
+.segment-remove {
+    # min-width: 10;
+    # height: 1;
+
 }
 #run-progress {
     display: none;

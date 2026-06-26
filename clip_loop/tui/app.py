@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -12,7 +13,6 @@ from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
     Button,
     Checkbox,
-    Collapsible,
     Footer,
     Header,
     Input,
@@ -20,6 +20,8 @@ from textual.widgets import (
     LoadingIndicator,
     Select,
     Static,
+    TabbedContent,
+    TabPane,
 )
 
 from clip_loop.errors import ClipLoopError
@@ -49,6 +51,13 @@ from clip_loop.tui.constants import (
 from clip_loop.tui.form import ClipLoopForm
 from clip_loop.tui.run_progress import RunProgressController
 from clip_loop.tui.screens import FilePickScreen
+from clip_loop.tui.segments import (
+    AudioSegmentRow,
+    VideoSegmentRow,
+    segment_row_ancestor,
+    sync_row_custom_visibility,
+    sync_video_row_crop,
+)
 from clip_loop.tui.validator import ClipLoopFormValidator
 
 ClipLoopRunner = Callable[[ClipLoopOptions], Path]
@@ -83,17 +92,17 @@ class ClipLoopApp(App[None]):
         self._progress = RunProgressController(self)
         self._last_run_options: ClipLoopOptions | None = None
 
+    @property
+    def _video_rows(self):
+        return self._form.video_rows
+
+    @property
+    def _audio_rows(self):
+        return self._form.audio_rows
+
     def compose(self) -> ComposeResult:
         yield Header()
         with VerticalScroll():
-            yield Label("Input video", classes="field-label")
-            with Horizontal(classes="field-row"):
-                yield Input(
-                    placeholder="path/to/clip.mp4",
-                    id="input-path",
-                )
-                yield Button("Browse…", id="browse-input")
-
             yield Label("Target duration", classes="field-label")
             yield Select(DURATION_PRESETS, id="duration-preset", value="1h")
             yield Input(
@@ -109,89 +118,139 @@ class ClipLoopApp(App[None]):
                     id="output-path",
                 )
                 yield Button("Browse…", id="browse-output")
+            with TabbedContent(id="media-options-tabs"):
+                with TabPane("Video", id="media-video-tab"):
+                    with Container(classes="groupbox"):
+                        yield Label("Video input", classes="groupbox-title")
+                        with Vertical(classes="groupbox-body"):
+                            with TabbedContent(id="video-input-tabs"):
+                                with TabPane("Single", id="video-single-tab"):
+                                    with Horizontal(classes="field-row"):
+                                        yield Input(
+                                            placeholder="path/to/clip.mp4",
+                                            id="input-path",
+                                        )
+                                        yield Button("Browse…", id="browse-input")
+                                    yield Label("Trim start", classes="field-label")
+                                    yield Select(MS_PRESETS, id="trim-preset", value="0")
+                                    yield Input(
+                                        placeholder="milliseconds",
+                                        id="trim-custom",
+                                        classes="hidden-custom",
+                                    )
+                                    yield Label("Playback speed", classes="field-label")
+                                    yield Select(SPEED_PRESETS, id="speed-preset", value="100")
+                                    yield Input(
+                                        placeholder="e.g. 80 or 120",
+                                        id="speed-custom",
+                                        classes="hidden-custom",
+                                    )
+                                    yield Label("Crop before loop", classes="field-label")
+                                    yield Select(
+                                        KEEP_RATIO_PRESETS,
+                                        id="keep-ratio-preset",
+                                        value="off",
+                                    )
+                                    yield Input(
+                                        placeholder="e.g. 75% or 0.75",
+                                        id="keep-ratio-custom",
+                                        classes="hidden-custom",
+                                        disabled=True,
+                                    )
+                                    yield Label("Crop corner", classes="field-label")
+                                    yield Select(
+                                        CROP_CORNER_PRESETS,
+                                        id="crop-corner",
+                                        value="top_left",
+                                        disabled=True,
+                                    )
+                                    yield Checkbox(
+                                        "Ping-pong video (--alternate-reverse)",
+                                        id="alternate-reverse",
+                                    )
+                                with TabPane("Multiple", id="video-multiple-tab"):
+                                    yield Vertical(id="video-segments-list")
+                                    with Horizontal(classes="segment-add-row"):
+                                        yield Button(
+                                            "Add video",
+                                            id="add-video-segment",
+                                            classes="segment-add",
+                                        )
 
-            with Collapsible(title="Video options", collapsed=False, id="video-collapsible"):
-                yield Checkbox(
-                    "Ping-pong video (--alternate-reverse)",
-                    id="alternate-reverse",
-                )
-                yield Label("Trim start", classes="field-label")
-                yield Select(MS_PRESETS, id="trim-preset", value="0")
-                yield Input(
-                    placeholder="milliseconds",
-                    id="trim-custom",
-                    classes="hidden-custom",
-                )
-                yield Label("Playback speed", classes="field-label")
-                yield Select(SPEED_PRESETS, id="speed-preset", value="100")
-                yield Input(
-                    placeholder="e.g. 80 or 120",
-                    id="speed-custom",
-                    classes="hidden-custom",
-                )
-                yield Label("Crop before loop", classes="field-label")
-                yield Select(KEEP_RATIO_PRESETS, id="keep-ratio-preset", value="off")
-                yield Input(
-                    placeholder="e.g. 75% or 0.75",
-                    id="keep-ratio-custom",
-                    classes="hidden-custom",
-                    disabled=True,
-                )
-                yield Label("Crop corner", classes="field-label")
-                yield Select(
-                    CROP_CORNER_PRESETS,
-                    id="crop-corner",
-                    value="top_left",
-                    disabled=True,
-                )
-
-            with Collapsible(title="Audio options", collapsed=True, id="audio-collapsible"):
-                yield Label("External audio (optional)", classes="field-label")
-                with Horizontal(classes="field-row"):
-                    yield Input(
-                        placeholder="path/to/audio.mp3",
-                        id="audio-path",
+                with TabPane("Audio", id="media-audio-tab"):
+                    yield Label("Crossfade at loop seams", classes="field-label")
+                    yield Select(
+                        MS_PRESETS,
+                        id="crossfade-preset",
+                        value="0",
+                        disabled=True,
                     )
-                    yield Button("Browse…", id="browse-audio")
-                yield Checkbox(
-                    "Ping-pong audio (--audio-alternate-reverse)",
-                    id="audio-alternate-reverse",
-                    disabled=True,
-                )
-                yield Label("Crossfade at seams", classes="field-label")
-                yield Select(
-                    MS_PRESETS,
-                    id="crossfade-preset",
-                    value="0",
-                    disabled=True,
-                )
-                yield Input(
-                    placeholder="milliseconds",
-                    id="crossfade-custom",
-                    classes="hidden-custom",
-                    disabled=True,
-                )
-                yield Label("Silence gap between clips", classes="field-label")
-                yield Select(MS_PRESETS, id="gap-preset", value="0", disabled=True)
-                yield Input(
-                    placeholder="milliseconds",
-                    id="gap-custom",
-                    classes="hidden-custom",
-                    disabled=True,
-                )
-                yield Label("Seam fade in/out", classes="field-label")
-                yield Select(
-                    MS_PRESETS,
-                    id="seam-fade-preset",
-                    value="0",
-                    disabled=True,
-                )
-                yield Input(
-                    placeholder="milliseconds",
-                    id="seam-fade-custom",
-                    classes="hidden-custom",
-                    disabled=True,
-                )
+                    yield Input(
+                        placeholder="milliseconds",
+                        id="crossfade-custom",
+                        classes="hidden-custom",
+                        disabled=True,
+                    )
+                    yield Label("Silence gap between loops", classes="field-label")
+                    yield Select(MS_PRESETS, id="gap-preset", value="0", disabled=True)
+                    yield Input(
+                        placeholder="milliseconds",
+                        id="gap-custom",
+                        classes="hidden-custom",
+                        disabled=True,
+                    )
+                    yield Label("Seam fade in/out", classes="field-label")
+                    yield Select(
+                        MS_PRESETS,
+                        id="seam-fade-preset",
+                        value="0",
+                        disabled=True,
+                    )
+                    yield Input(
+                        placeholder="milliseconds",
+                        id="seam-fade-custom",
+                        classes="hidden-custom",
+                        disabled=True,
+                    )
+
+                    with Container(classes="groupbox"):
+                        yield Label("Audio input", classes="groupbox-title")
+                        with Vertical(classes="groupbox-body"):
+                            with TabbedContent(id="audio-input-tabs"):
+                                with TabPane("Single", id="audio-single-tab"):
+                                    yield Label("External audio (optional)", classes="field-label")
+                                    with Horizontal(classes="field-row"):
+                                        yield Input(
+                                            placeholder="path/to/audio.mp3",
+                                            id="audio-path",
+                                        )
+                                        yield Button("Browse…", id="browse-audio")
+                                    yield Label("Trim start", classes="field-label")
+                                    yield Select(
+                                        MS_PRESETS,
+                                        id="audio-trim-preset",
+                                        value="0",
+                                        disabled=True,
+                                    )
+                                    yield Input(
+                                        placeholder="milliseconds",
+                                        id="audio-trim-custom",
+                                        classes="hidden-custom",
+                                        disabled=True,
+                                    )
+                                    yield Checkbox(
+                                        "Ping-pong audio (--audio-alternate-reverse)",
+                                        id="audio-alternate-reverse",
+                                        disabled=True,
+                                    )
+                                with TabPane("Multiple", id="audio-multiple-tab"):
+                                    yield Vertical(id="audio-segments-list")
+                                    with Horizontal(classes="segment-add-row"):
+                                        yield Button(
+                                            "Add audio",
+                                            id="add-audio-segment",
+                                            classes="segment-add",
+                                        )
 
         with Container(id="run-progress"):
             with Horizontal(classes="run-progress-row"):
@@ -207,6 +266,8 @@ class ClipLoopApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._video_rows.ensure_initial_rows()
+        self._audio_rows.ensure_initial_rows()
         if self._initial_input is not None:
             self.query_one("#input-path", Input).value = str(self._initial_input)
         if self._initial_output is not None:
@@ -233,12 +294,24 @@ class ClipLoopApp(App[None]):
         self._form.sync_custom_visibility("trim-preset", "trim-custom")
         self._form.sync_custom_visibility("speed-preset", "speed-custom")
         self._form.sync_custom_visibility("keep-ratio-preset", "keep-ratio-custom")
+        self._form.sync_custom_visibility("audio-trim-preset", "audio-trim-custom")
         for preset_id, custom_id in (
             ("crossfade-preset", "crossfade-custom"),
             ("gap-preset", "gap-custom"),
             ("seam-fade-preset", "seam-fade-custom"),
         ):
             self._form.sync_custom_visibility(preset_id, custom_id)
+        for row in self._video_rows._rows():
+            prefix = f"video-seg-{row.index}"
+            sync_row_custom_visibility(row, f"#{prefix}-trim-preset", f"#{prefix}-trim-custom")
+            sync_row_custom_visibility(row, f"#{prefix}-speed-preset", f"#{prefix}-speed-custom")
+            sync_row_custom_visibility(
+                row, f"#{prefix}-keep-ratio-preset", f"#{prefix}-keep-ratio-custom"
+            )
+            sync_video_row_crop(row)
+        for row in self._audio_rows._rows():
+            prefix = f"audio-seg-{row.index}"
+            sync_row_custom_visibility(row, f"#{prefix}-trim-preset", f"#{prefix}-trim-custom")
 
     def _set_status(self, message: str) -> None:
         self.query_one("#status", Static).update(message)
@@ -248,6 +321,12 @@ class ClipLoopApp(App[None]):
             widget = self.query(widget_id).first()
             if widget is not None:
                 widget.remove_class(INVALID_CLASS)
+        for row in self._video_rows._rows():
+            for child in row.walk_children(with_self=True):
+                child.remove_class(INVALID_CLASS)
+        for row in self._audio_rows._rows():
+            for child in row.walk_children(with_self=True):
+                child.remove_class(INVALID_CLASS)
 
     def _set_validation_highlights(self, widget_ids: list[str]) -> None:
         self._clear_validation_highlights()
@@ -256,9 +335,10 @@ class ClipLoopApp(App[None]):
 
     def _expand_sections_for(self, widget_ids: list[str]) -> None:
         if AUDIO_SECTION_IDS.intersection(widget_ids):
-            self.query_one("#audio-collapsible", Collapsible).collapsed = False
+            self.query_one("#media-options-tabs", TabbedContent).active = "media-audio-tab"
         if VIDEO_SECTION_IDS.intersection(widget_ids):
-            self.query_one("#video-collapsible", Collapsible).collapsed = False
+            self.query_one("#media-options-tabs", TabbedContent).active = "media-video-tab"
+            self.query_one("#video-input-tabs", TabbedContent).active = "video-single-tab"
 
     @work(exclusive=True)
     async def _browse_into_input(
@@ -267,6 +347,7 @@ class ClipLoopApp(App[None]):
         start: Path,
         *,
         save: bool = False,
+        audio: bool = False,
     ) -> None:
         if save:
             start_dir, default_name = self._form.browse_save_defaults(input_id)
@@ -276,7 +357,7 @@ class ClipLoopApp(App[None]):
                 start=start_dir,
                 default_name=default_name,
             )
-        elif input_id == "#audio-path":
+        elif audio:
             picked = await asyncio.to_thread(
                 pick_open_file,
                 title="Select audio file",
@@ -329,6 +410,10 @@ class ClipLoopApp(App[None]):
     def speed_preset_changed(self) -> None:
         self._form.sync_custom_visibility("speed-preset", "speed-custom")
 
+    @on(Select.Changed, "#audio-trim-preset")
+    def audio_trim_preset_changed(self) -> None:
+        self._form.sync_custom_visibility("audio-trim-preset", "audio-trim-custom")
+
     @on(Select.Changed, "#crossfade-preset")
     def crossfade_preset_changed(self) -> None:
         self._form.sync_custom_visibility("crossfade-preset", "crossfade-custom")
@@ -340,6 +425,33 @@ class ClipLoopApp(App[None]):
     @on(Select.Changed, "#seam-fade-preset")
     def seam_fade_preset_changed(self) -> None:
         self._form.sync_custom_visibility("seam-fade-preset", "seam-fade-custom")
+
+    @on(Select.Changed)
+    def segment_select_changed(self, event: Select.Changed) -> None:
+        select_id = event.select.id or ""
+        if not select_id.startswith(("video-seg-", "audio-seg-")):
+            return
+        row = segment_row_ancestor(event.select, VideoSegmentRow)
+        if select_id.endswith("-trim-preset"):
+            sync_row_custom_visibility(
+                event.select,
+                f"#{select_id}",
+                f"#{select_id.replace('-trim-preset', '-trim-custom')}",
+            )
+        elif select_id.endswith("-speed-preset"):
+            sync_row_custom_visibility(
+                event.select,
+                f"#{select_id}",
+                f"#{select_id.replace('-speed-preset', '-speed-custom')}",
+            )
+        elif select_id.endswith("-keep-ratio-preset"):
+            sync_row_custom_visibility(
+                event.select,
+                f"#{select_id}",
+                f"#{select_id.replace('-keep-ratio-preset', '-keep-ratio-custom')}",
+            )
+            if isinstance(row, VideoSegmentRow):
+                sync_video_row_crop(row)
 
     @on(Button.Pressed, "#browse-input")
     def browse_input(self) -> None:
@@ -355,14 +467,76 @@ class ClipLoopApp(App[None]):
 
     @on(Button.Pressed, "#browse-audio")
     def browse_audio(self) -> None:
-        self._browse_into_input("#audio-path", self._form.browse_start_dir("#audio-path"))
+        self._browse_into_input(
+            "#audio-path",
+            self._form.browse_start_dir("#audio-path"),
+            audio=True,
+        )
+
+    @on(Button.Pressed, "#add-video-segment")
+    def add_video_segment(self) -> None:
+        self._video_rows.add_row()
+
+    @on(Button.Pressed, "#add-audio-segment")
+    def add_audio_segment(self) -> None:
+        self._audio_rows.add_row()
+
+    @on(Button.Pressed, ".segment-remove")
+    def segment_remove_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        video_remove = re.fullmatch(r"video-seg-(\d+)-remove", button_id)
+        if video_remove:
+            index = int(video_remove.group(1))
+            row = self.query_one(f"#video-seg-{index}-row", VideoSegmentRow)
+            self._video_rows.remove_row_widget(row)
+            return
+        audio_remove = re.fullmatch(r"audio-seg-(\d+)-remove", button_id)
+        if audio_remove:
+            index = int(audio_remove.group(1))
+            row = self.query_one(f"#audio-seg-{index}-row", AudioSegmentRow)
+            self._audio_rows.remove_row_widget(row)
+
+    @on(Button.Pressed)
+    def segment_browse_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        if button_id.endswith("-remove"):
+            return
+        video_browse = re.fullmatch(r"video-seg-(\d+)-browse", button_id)
+        if video_browse:
+            index = int(video_browse.group(1))
+            path_id = f"#video-seg-{index}-path"
+            self._browse_into_input(
+                path_id,
+                self._form.browse_start_dir(path_id),
+            )
+            return
+        audio_browse = re.fullmatch(r"audio-seg-(\d+)-browse", button_id)
+        if audio_browse:
+            index = int(audio_browse.group(1))
+            path_id = f"#audio-seg-{index}-path"
+            self._browse_into_input(
+                path_id,
+                self._form.browse_start_dir(path_id),
+                audio=True,
+            )
+            return
+        audio_browse = re.fullmatch(r"audio-seg-(\d+)-browse", button_id)
+        if audio_browse:
+            index = int(audio_browse.group(1))
+            path_id = f"#audio-seg-{index}-path"
+            self._browse_into_input(
+                path_id,
+                self._form.browse_start_dir(path_id),
+                audio=True,
+            )
 
     @on(Button.Pressed, "#apply-last")
-    def apply_last_pressed(self) -> None:
+    @work
+    async def apply_last_pressed(self) -> None:
         if self._last_run_options is None:
             return
         self._clear_validation_highlights()
-        self._form.apply(self._last_run_options)
+        await self._form.apply(self._last_run_options)
         self._sync_form_visibility()
         self._set_status("Applied settings from last run.")
 

@@ -9,16 +9,19 @@ from pathlib import Path
 from textual.widgets import Input, Select
 
 from clip_loop.errors import ClipLoopError
+from clip_loop.options import ClipLoopOptions
 from clip_loop.parsing import parse_crop_corner
 from clip_loop.validation import validate_clip_loop_options
 
-from clip_loop.tui.form import (
-    ClipLoopForm,
+from clip_loop.tui.fields import (
     is_crop_enabled,
     ms_from_select,
     try_parse_duration,
     try_parse_keep_ratio,
     try_parse_speed,
+)
+from clip_loop.tui.form import (
+    ClipLoopForm,
     widget_for_clip_loop_error,
 )
 
@@ -46,17 +49,6 @@ class ClipLoopFormValidator:
         highlights: list[str] = []
         errors: list[str] = []
 
-        input_text = app.query_one("#input-path", Input).value.strip()
-        input_path: Path | None = None
-        if not input_text:
-            highlights.append("#input-path")
-            errors.append("Input video path is required.")
-        else:
-            input_path = Path(input_text)
-            if not input_path.is_file():
-                highlights.append("#input-path")
-                errors.append(f"Input not found: {input_path}")
-
         duration_select = app.query_one("#duration-preset", Select)
         duration_custom = app.query_one("#duration-custom", Input)
         duration_is_custom = self._form.duration_is_custom()
@@ -69,50 +61,6 @@ class ClipLoopFormValidator:
             errors.append("Invalid duration.")
         else:
             duration = parsed_duration
-
-        audio_text = app.query_one("#audio-path", Input).value.strip()
-        audio_path = Path(audio_text) if audio_text else None
-
-        trim_select = app.query_one("#trim-preset", Select)
-        trim_custom = app.query_one("#trim-custom", Input)
-        trim_start_ms = 0
-        try:
-            trim_start_ms = ms_from_select(trim_select, trim_custom)
-        except ValueError:
-            highlights.append(
-                "#trim-custom" if trim_select.value == "custom" else "#trim-preset"
-            )
-            errors.append("Invalid trim start value.")
-
-        speed_select = app.query_one("#speed-preset", Select)
-        speed_custom = app.query_one("#speed-custom", Input)
-        speed_percent, speed_widget = try_parse_speed(speed_select, speed_custom)
-        if speed_percent is None:
-            highlights.append(speed_widget or "#speed-preset")
-            errors.append("Invalid playback speed.")
-
-        keep_ratio_select = app.query_one("#keep-ratio-preset", Select)
-        keep_ratio_custom = app.query_one("#keep-ratio-custom", Input)
-        crop_enabled = is_crop_enabled(keep_ratio_select)
-        keep_ratio: float | None = None
-        crop_corner: str | None = None
-        if crop_enabled:
-            keep_ratio, keep_ratio_widget = try_parse_keep_ratio(
-                keep_ratio_select, keep_ratio_custom
-            )
-            if keep_ratio is None:
-                highlights.append(keep_ratio_widget or "#keep-ratio-preset")
-                errors.append("Invalid keep ratio.")
-            corner_select = app.query_one("#crop-corner", Select)
-            if corner_select.value is Select.BLANK:
-                highlights.append("#crop-corner")
-                errors.append("Crop corner is required.")
-            else:
-                try:
-                    crop_corner = parse_crop_corner(corner_select.value)
-                except argparse.ArgumentTypeError:
-                    highlights.append("#crop-corner")
-                    errors.append("Invalid crop corner.")
 
         crossfade_select = app.query_one("#crossfade-preset", Select)
         crossfade_custom = app.query_one("#crossfade-custom", Input)
@@ -148,23 +96,142 @@ class ClipLoopFormValidator:
             else:
                 audio_seam_fade_ms = ms
 
-        if input_path is not None and duration_ok and not errors and speed_percent is not None:
+        options: ClipLoopOptions | None = None
+
+        if self._form.video_mode_is_multiple():
+            video_segments = self._form.video_rows.read_segments()
+            if not video_segments:
+                highlights.append("#video-segments-list")
+                errors.append("At least one video path is required in Multiple mode.")
+            else:
+                for row in self._form.video_rows._rows():
+                    prefix = f"video-seg-{row.index}"
+                    path_text = row.query_one(f"#{prefix}-path", Input).value.strip()
+                    if not path_text:
+                        continue
+                    path = Path(path_text)
+                    if not path.is_file():
+                        highlights.append(f"#{prefix}-path")
+                        errors.append(f"Input not found: {path}")
+                    speed_select = row.query_one(f"#{prefix}-speed-preset", Select)
+                    speed_custom = row.query_one(f"#{prefix}-speed-custom", Input)
+                    speed_percent, speed_widget = try_parse_speed(speed_select, speed_custom)
+                    if speed_percent is None:
+                        highlights.append(speed_widget or f"#{prefix}-speed-preset")
+                        errors.append("Invalid playback speed.")
+                    keep_ratio_select = row.query_one(f"#{prefix}-keep-ratio-preset", Select)
+                    keep_ratio_custom = row.query_one(f"#{prefix}-keep-ratio-custom", Input)
+                    if is_crop_enabled(keep_ratio_select):
+                        keep_ratio, keep_ratio_widget = try_parse_keep_ratio(
+                            keep_ratio_select, keep_ratio_custom
+                        )
+                        if keep_ratio is None:
+                            highlights.append(
+                                keep_ratio_widget or f"#{prefix}-keep-ratio-preset"
+                            )
+                            errors.append("Invalid keep ratio.")
+                        corner_select = row.query_one(f"#{prefix}-crop-corner", Select)
+                        if corner_select.value is Select.BLANK:
+                            highlights.append(f"#{prefix}-crop-corner")
+                            errors.append("Crop corner is required.")
+                        else:
+                            try:
+                                parse_crop_corner(corner_select.value)
+                            except argparse.ArgumentTypeError:
+                                highlights.append(f"#{prefix}-crop-corner")
+                                errors.append("Invalid crop corner.")
+        else:
+            input_text = app.query_one("#input-path", Input).value.strip()
+            if not input_text:
+                highlights.append("#input-path")
+                errors.append("Input video path is required.")
+            else:
+                input_path = Path(input_text)
+                if not input_path.is_file():
+                    highlights.append("#input-path")
+                    errors.append(f"Input not found: {input_path}")
+
+            trim_select = app.query_one("#trim-preset", Select)
+            trim_custom = app.query_one("#trim-custom", Input)
             try:
-                validate_clip_loop_options(
-                    input_path=input_path,
-                    duration=duration,
-                    trim_start_ms=trim_start_ms,
-                    audio_path=audio_path,
-                    audio_alternate_reverse=app.query_one(
-                        "#audio-alternate-reverse"
-                    ).value,
-                    audio_crossfade_ms=audio_crossfade_ms,
-                    audio_gap_ms=audio_gap_ms,
-                    audio_seam_fade_ms=audio_seam_fade_ms,
-                    keep_ratio=keep_ratio,
-                    crop_corner=crop_corner,
-                    speed_percent=speed_percent,
+                ms_from_select(trim_select, trim_custom)
+            except ValueError:
+                highlights.append(
+                    "#trim-custom" if trim_select.value == "custom" else "#trim-preset"
                 )
+                errors.append("Invalid trim start value.")
+
+            speed_select = app.query_one("#speed-preset", Select)
+            speed_custom = app.query_one("#speed-custom", Input)
+            speed_percent, speed_widget = try_parse_speed(speed_select, speed_custom)
+            if speed_percent is None:
+                highlights.append(speed_widget or "#speed-preset")
+                errors.append("Invalid playback speed.")
+
+            keep_ratio_select = app.query_one("#keep-ratio-preset", Select)
+            keep_ratio_custom = app.query_one("#keep-ratio-custom", Input)
+            if is_crop_enabled(keep_ratio_select):
+                keep_ratio, keep_ratio_widget = try_parse_keep_ratio(
+                    keep_ratio_select, keep_ratio_custom
+                )
+                if keep_ratio is None:
+                    highlights.append(keep_ratio_widget or "#keep-ratio-preset")
+                    errors.append("Invalid keep ratio.")
+                corner_select = app.query_one("#crop-corner", Select)
+                if corner_select.value is Select.BLANK:
+                    highlights.append("#crop-corner")
+                    errors.append("Crop corner is required.")
+                else:
+                    try:
+                        parse_crop_corner(corner_select.value)
+                    except argparse.ArgumentTypeError:
+                        highlights.append("#crop-corner")
+                        errors.append("Invalid crop corner.")
+
+        if self._form.audio_mode_is_multiple():
+            for row in self._form.audio_rows._rows():
+                prefix = f"audio-seg-{row.index}"
+                path_text = row.query_one(f"#{prefix}-path", Input).value.strip()
+                if not path_text:
+                    continue
+                path = Path(path_text)
+                if not path.is_file():
+                    highlights.append(f"#{prefix}-path")
+                    errors.append(f"Audio input not found: {path}")
+                trim_select = row.query_one(f"#{prefix}-trim-preset", Select)
+                trim_custom = row.query_one(f"#{prefix}-trim-custom", Input)
+                try:
+                    ms_from_select(trim_select, trim_custom)
+                except ValueError:
+                    highlights.append(
+                        f"#{prefix}-trim-custom"
+                        if trim_select.value == "custom"
+                        else f"#{prefix}-trim-preset"
+                    )
+                    errors.append("Invalid audio trim start value.")
+        else:
+            audio_text = app.query_one("#audio-path", Input).value.strip()
+            if audio_text:
+                audio_path = Path(audio_text)
+                if not audio_path.is_file():
+                    highlights.append("#audio-path")
+                    errors.append(f"Audio input not found: {audio_path}")
+                trim_select = app.query_one("#audio-trim-preset", Select)
+                trim_custom = app.query_one("#audio-trim-custom", Input)
+                try:
+                    ms_from_select(trim_select, trim_custom)
+                except ValueError:
+                    highlights.append(
+                        "#audio-trim-custom"
+                        if trim_select.value == "custom"
+                        else "#audio-trim-preset"
+                    )
+                    errors.append("Invalid audio trim start value.")
+
+        if duration_ok and not errors:
+            try:
+                options = self._form.collect()
+                validate_clip_loop_options(options)
             except ClipLoopError as exc:
                 widget_id = widget_for_clip_loop_error(
                     str(exc), duration_is_custom=duration_is_custom
