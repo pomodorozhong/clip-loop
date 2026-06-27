@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.widgets import Button, Checkbox, Input, Select
+from textual.widgets import Checkbox
 
-from clip_loop.tui.constants import MS_PRESETS
 from clip_loop.tui.widgets.collapsible_segment_row import CollapsibleSegmentRow
-from clip_loop.tui.widgets.field_label import FieldLabel
-from clip_loop.tui.widgets.field_row import FieldRow
-from clip_loop.tui.widgets.preset_input import PresetInput
+from clip_loop.tui.widgets.ms_preset_field import MsPresetField
+from clip_loop.tui.widgets.path_browse_row import PathBrowseRow
 
 
 class AudioSegmentRow(CollapsibleSegmentRow):
@@ -26,13 +24,14 @@ class AudioSegmentRow(CollapsibleSegmentRow):
 
     def _content(self) -> ComposeResult:
         prefix = f"{self.ROW_PREFIX}-{self.index}"
-        with FieldRow():
-            yield Input(placeholder="path/to/audio.mp3", id=f"{prefix}-path")
-            yield Button("Browse…", id=f"{prefix}-browse")
-        yield FieldLabel("Trim start")
-        yield Select(MS_PRESETS, id=f"{prefix}-trim-preset", value="0")
-        yield PresetInput(
-            placeholder="milliseconds",
-            id=f"{prefix}-trim-custom",
+        yield PathBrowseRow(
+            input_id=f"{prefix}-path",
+            browse_id=f"{prefix}-browse",
+            placeholder="path/to/audio.mp3",
+        )
+        yield MsPresetField(
+            "Trim start",
+            f"{prefix}-trim-preset",
+            f"{prefix}-trim-custom",
         )
         yield Checkbox("Ping-pong audio", id=f"{prefix}-alternate-reverse")
