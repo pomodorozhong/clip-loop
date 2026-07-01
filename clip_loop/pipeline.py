@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -63,10 +64,9 @@ def loop_video_with_optional_audio(
         cleanup_temp_paths(audio_temp_paths)
 
 
-def _resolve_sources(options: ClipLoopOptions) -> tuple[Path, Path | None, list[Path]]:
-    """Preprocess and join segments; return source video, external audio, and temps."""
+def _preprocess_video_segments(options: ClipLoopOptions) -> tuple[list[Path], list[Path]]:
+    """Return processed per-segment videos and temp paths."""
     temps: list[Path] = []
-
     video_suffix = options.video_segments[0].path.suffix or ".mp4"
     processed_videos: list[Path] = []
     for segment in options.video_segments:
@@ -81,6 +81,13 @@ def _resolve_sources(options: ClipLoopOptions) -> tuple[Path, Path | None, list[
             )
             temps.extend(scale_temps)
         processed_videos.append(path)
+    return processed_videos, temps
+
+
+def _resolve_sources(options: ClipLoopOptions) -> tuple[Path, Path | None, list[Path]]:
+    """Preprocess and join segments; return source video, external audio, and temps."""
+    video_suffix = options.video_segments[0].path.suffix or ".mp4"
+    processed_videos, temps = _preprocess_video_segments(options)
 
     if len(processed_videos) == 1:
         source_video = processed_videos[0]
@@ -118,6 +125,40 @@ def _resolve_sources(options: ClipLoopOptions) -> tuple[Path, Path | None, list[
             external_audio = joined_audio
 
     return source_video, external_audio, temps
+
+
+def export_preview_video_clips(
+    options: ClipLoopOptions,
+    *,
+    base_output_path: Path | None = None,
+) -> tuple[Path, list[Path]]:
+    """Export post-processed per-segment clips into a preview folder."""
+    validate_clip_loop_options(options)
+
+    preview_target = base_output_path or options.preview_output_path or options.output_path
+    if preview_target is None:
+        preview_target = default_output_path(options.input_path)
+
+    preview_parent = preview_target if preview_target.suffix == "" else preview_target.parent
+    preview_dir = preview_parent / "preview"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+
+    preprocess_temps: list[Path] = []
+    output_paths: list[Path] = []
+    try:
+        processed_videos, preprocess_temps = _preprocess_video_segments(options)
+        for index, processed in enumerate(processed_videos, start=1):
+            suffix = processed.suffix or options.video_segments[index - 1].path.suffix or ".mp4"
+            name = f"{index:02d}_{options.video_segments[index - 1].path.stem}{suffix}"
+            destination = preview_dir / name
+            shutil.copy2(processed, destination)
+            output_paths.append(destination)
+    except subprocess.CalledProcessError as exc:
+        raise ClipLoopError("ffmpeg failed while creating preview clips.") from exc
+    finally:
+        cleanup_temp_paths(preprocess_temps)
+
+    return preview_dir, output_paths
 
 
 def run_clip_loop(options: ClipLoopOptions | None = None, /, **kwargs) -> Path:

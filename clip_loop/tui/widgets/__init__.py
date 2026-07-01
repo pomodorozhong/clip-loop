@@ -16,6 +16,7 @@ from clip_loop.tui.widgets.multiple_video_input_panel import MultipleVideoInputP
 from clip_loop.tui.widgets.output_path_fields import OutputPathFields
 from clip_loop.tui.widgets.path_browse_row import PathBrowseRow
 from clip_loop.tui.widgets.preset_input import PresetInput
+from clip_loop.tui.widgets.preview_path_screen import PreviewPathScreen
 from clip_loop.tui.widgets.preset_select_field import PresetSelectField
 from clip_loop.tui.widgets.resolution_fields import ResolutionFields
 from clip_loop.tui.widgets.run_progress_panel import RunProgressPanel
@@ -45,6 +46,7 @@ __all__ = [
     "OutputPathFields",
     "PathBrowseRow",
     "PresetInput",
+    "PreviewPathScreen",
     "PresetSelectField",
     "ResolutionFields",
     "RunProgressPanel",

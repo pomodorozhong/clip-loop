@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from dataclasses import replace
 from pathlib import Path
 
 from textual import on, work
@@ -16,12 +17,18 @@ from clip_loop.file_dialog import (
     pick_open_file,
     pick_save_file,
 )
+from clip_loop.pipeline import export_preview_video_clips
 from clip_loop.tui.constants import AUDIO_SECTION_IDS, INVALID_CLASS, VIDEO_SECTION_IDS
 from clip_loop.tui.segments import (
     sync_row_custom_visibility,
     sync_video_row_crop,
 )
-from clip_loop.tui.widgets import AudioSegmentRow, FilePickScreen, VideoSegmentRow
+from clip_loop.tui.widgets import (
+    AudioSegmentRow,
+    FilePickScreen,
+    PreviewPathScreen,
+    VideoSegmentRow,
+)
 
 
 class FormHandlersMixin:
@@ -221,6 +228,43 @@ class FormHandlersMixin:
         await self._form.apply(self._last_run_options)
         self._sync_form_visibility()
         self._set_status("Applied settings from last run.")
+
+    @on(Button.Pressed, "#preview-clips")
+    @work
+    async def preview_clips_pressed(self) -> None:
+        default_path = self._default_preview_path()
+        preview_target = await self.push_screen_wait(PreviewPathScreen(default_path))
+        if preview_target is None:
+            return
+        options = self._form.collect()
+        options = replace(options, preview_output_path=preview_target)
+        self._set_status("Creating preview clips...")
+        self._preview_worker(options, preview_target)
+
+    @work(thread=True, exclusive=True)
+    def _preview_worker(self, options, preview_target: Path) -> None:
+        try:
+            preview_dir, outputs = export_preview_video_clips(
+                options,
+                base_output_path=preview_target,
+            )
+        except Exception as exc:
+            self.call_from_thread(self._set_status, f"Preview failed: {exc}")
+            return
+        self.call_from_thread(
+            self._set_status,
+            f"Created {len(outputs)} preview clip(s) in {preview_dir}",
+        )
+
+    def _default_preview_path(self) -> Path:
+        output_text = self.query_one("#output-path", Input).value.strip()
+        if output_text:
+            return Path(output_text).expanduser()
+        input_text = self.query_one("#input-path", Input).value.strip()
+        if input_text:
+            source = Path(input_text).expanduser()
+            return source.parent / f"{source.stem}_looped{source.suffix or '.mp4'}"
+        return Path.home() / "output.mp4"
 
     @on(Button.Pressed, "#quit")
     def quit_pressed(self) -> None:

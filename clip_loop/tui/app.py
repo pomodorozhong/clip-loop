@@ -127,6 +127,7 @@ class ClipLoopApp(FormHandlersMixin, App[None]):
         with Horizontal(id="action-row"):
             yield Button("Run", variant="primary", id="run")
             yield Button("Apply last run", id="apply-last", disabled=True)
+            yield Button("Preview video clips", id="preview-clips")
             yield Button("Quit", id="quit")
         yield Footer()
 

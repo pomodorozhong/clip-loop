@@ -9,7 +9,7 @@ import pytest
 
 from clip_loop.media import ffprobe_video_size
 from clip_loop.options import AudioSegment, ClipLoopOptions, VideoSegment
-from clip_loop.pipeline import run_clip_loop
+from clip_loop.pipeline import export_preview_video_clips, run_clip_loop
 
 
 def _video_duration_sec(path: Path) -> float:
@@ -83,3 +83,25 @@ def test_run_clip_loop_multi_segment_join(
     assert output.is_file()
     duration = _video_duration_sec(output)
     assert 3.5 <= duration <= 4.5
+
+
+def test_export_preview_video_clips(tmp_media_dir: Path, tmp_path: Path) -> None:
+    video = tmp_media_dir / "sample.mp4"
+    clip_a = tmp_path / "a.mp4"
+    clip_b = tmp_path / "b.mp4"
+    shutil.copy(video, clip_a)
+    shutil.copy(video, clip_b)
+    output = tmp_path / "joined.mp4"
+    options = ClipLoopOptions(
+        video_segments=(
+            VideoSegment(path=clip_a, speed_percent=80.0),
+            VideoSegment(path=clip_b, trim_start_ms=200),
+        ),
+        duration=4.0,
+        output_path=output,
+    )
+
+    preview_dir, preview_files = export_preview_video_clips(options)
+    assert preview_dir == tmp_path / "preview"
+    assert len(preview_files) == 2
+    assert all(path.is_file() for path in preview_files)

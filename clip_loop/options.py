@@ -42,6 +42,7 @@ class ClipLoopOptions:
     audio_seam_fade_ms: int = 0
     target_resolution: tuple[int, int] | None = None
     fill_mode: str = "fit"
+    preview_output_path: Path | None = None
 
     @property
     def input_path(self) -> Path:
@@ -122,6 +123,9 @@ class ClipLoopOptions:
                 else None
             ),
             "fill_mode": self.fill_mode,
+            "preview_output_path": (
+                str(self.preview_output_path) if self.preview_output_path else None
+            ),
             "video_input_mode": "multiple" if len(self.video_segments) > 1 else "single",
             "audio_input_mode": "multiple" if len(self.audio_segments) > 1 else "single",
         }
@@ -190,6 +194,11 @@ class ClipLoopOptions:
             audio_seam_fade_ms=int(data.get("audio_seam_fade_ms", 0)),
             target_resolution=target_resolution,
             fill_mode=str(data.get("fill_mode", "fit")),
+            preview_output_path=(
+                Path(data["preview_output_path"])
+                if data.get("preview_output_path")
+                else None
+            ),
         )
 
     @classmethod
