@@ -1,0 +1,15 @@
+repos:
+  - repo: local
+    hooks:
+      - id: generate-test-fixtures
+        name: generate test fixtures
+        entry: uv run generate-test-fixtures
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        pass_filenames: false
+        always_run: true

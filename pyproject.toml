@@ -11,6 +11,18 @@ tui = ["textual>=0.80.0"]
 
 [project.scripts]
 clip-loop = "clip_loop.cli:main"
+generate-test-fixtures = "clip_loop._test_fixtures:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pre-commit>=4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
 
 [build-system]
 requires = ["hatchling"]

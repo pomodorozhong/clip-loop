@@ -11,3 +11,7 @@ wheels/
 
 # macOS
 .DS_Store
+
+# Generated test media (see: uv run generate-test-fixtures)
+tests/fixtures/*
+!tests/fixtures/.gitkeep

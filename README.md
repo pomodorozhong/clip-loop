@@ -106,3 +106,20 @@ After `uv sync`, you can also activate `.venv` and run `clip-loop` directly.
 **External audio:** When `--audio` is provided, joined audio replaces the video's audio track. Loop-time seam options (`--audio-crossfade-ms`, `--audio-gap-ms`, `--audio-seam-fade-ms`) apply to the joined external audio.
 
 **Multi-clip join:** Unlike codecs or resolutions are normalized with a single re-encode before looping.
+
+## Development
+
+Requires **ffmpeg** on `PATH` for tests and fixture generation.
+
+```bash
+uv sync --group dev --extra tui
+uv run generate-test-fixtures   # optional; pytest auto-generates if missing
+uv run pytest
+uv run pre-commit install       # run tests on every git commit
+```
+
+Run all pre-commit hooks manually:
+
+```bash
+uv run pre-commit run --all-files
+```
